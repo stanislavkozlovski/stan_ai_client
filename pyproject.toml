@@ -12,7 +12,9 @@ license = {text = "MIT"}
 authors = [
   {name = "Stanislav Kozlovski"},
 ]
-dependencies = []
+dependencies = [
+  "jsonschema>=4.0",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -35,3 +37,7 @@ pythonpath = ["src"]
 python_version = "3.11"
 strict = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["jsonschema", "jsonschema.*"]
+ignore_missing_imports = true

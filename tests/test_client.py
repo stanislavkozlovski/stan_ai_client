@@ -13,7 +13,11 @@ from stan_ai_client import (
     ClaudeProcessError,
     ClaudeProtocolError,
     ClaudeRateLimitError,
+    ClaudeStructuredOutputMissingError,
+    ClaudeStructuredOutputValidationError,
     RunOptions,
+    StructuredRunResult,
+    StructuredSchema,
 )
 
 
@@ -223,3 +227,144 @@ def test_logging_can_include_prompt_text_when_enabled(
     client.run_text("super secret prompt")
 
     assert "Claude prompt=super secret prompt" in caplog.text
+
+
+def test_run_structured_passes_schema_and_returns_validated_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                '{"result":"ok","session_id":"sess-1","total_cost_usd":0.12,'
+                '"usage":{"input_tokens":10},"structured_output":{"summary":"brief"}}'
+            ),
+            stderr="",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string"},
+            },
+            "required": ["summary"],
+            "additionalProperties": False,
+        }
+    )
+
+    client = ClaudeCodeClient(default_model="claude-opus-4-6", default_effort="max")
+    result = client.run_structured("summarize this", schema=schema)
+
+    assert result.structured_output == {"summary": "brief"}
+    assert result.payload.structured_output == {"summary": "brief"}
+    assert result.payload.session_id == "sess-1"
+    assert result.payload.total_cost_usd == 0.12
+    assert result.payload.usage == {"input_tokens": 10}
+    assert recorder.calls[0]["input"] == "summarize this"
+    schema_index = recorder.calls[0]["argv"].index("--json-schema")
+    assert recorder.calls[0]["argv"][schema_index + 1] == schema.cli_json
+
+
+def test_run_structured_accepts_null_structured_output_when_schema_allows_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"result":"ok","structured_output":null}',
+            stderr="",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    client = ClaudeCodeClient()
+    null_schema: StructuredSchema[None] = StructuredSchema.from_dict({"type": "null"})
+    result: StructuredRunResult[None] = client.run_structured(
+        "return null",
+        schema=null_schema,
+    )
+
+    assert result.structured_output is None
+    assert result.payload.has_structured_output is True
+
+
+def test_run_structured_raises_when_structured_output_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"result":"ok","session_id":"sess-1"}',
+            stderr="",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    client = ClaudeCodeClient()
+    with pytest.raises(ClaudeStructuredOutputMissingError) as excinfo:
+        client.run_structured(
+            "summarize this",
+            schema=StructuredSchema.from_dict({"type": "object"}),
+        )
+
+    assert excinfo.value.payload.session_id == "sess-1"
+
+
+def test_run_structured_raises_when_structured_output_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"result":"ok","structured_output":{"summary":1}}',
+            stderr="",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    client = ClaudeCodeClient()
+    with pytest.raises(ClaudeStructuredOutputValidationError) as excinfo:
+        client.run_structured(
+            "summarize this",
+            schema=StructuredSchema.from_dict(
+                {
+                    "type": "object",
+                    "properties": {"summary": {"type": "string"}},
+                    "required": ["summary"],
+                    "additionalProperties": False,
+                }
+            ),
+        )
+
+    assert excinfo.value.structured_output == {"summary": 1}
+    assert "does not match the schema" in str(excinfo.value)
+
+
+def test_run_structured_raises_protocol_error_on_non_json_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="plain text",
+            stderr="",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    client = ClaudeCodeClient()
+    with pytest.raises(ClaudeProtocolError) as excinfo:
+        client.run_structured(
+            "hello",
+            schema=StructuredSchema.from_dict({"type": "object"}),
+        )
+
+    assert "structured mode" in str(excinfo.value)

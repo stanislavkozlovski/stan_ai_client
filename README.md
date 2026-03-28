@@ -8,8 +8,10 @@ The library is intentionally small and pragmatic:
 
 - `run_text()` for plain-text Claude output
 - `run_json()` for `--output-format json`
+- `run_structured()` for schema-validated structured output
 - typed results
 - structured exceptions
+- local JSON Schema validation
 - rate-limit parsing helpers
 - stdlib logging
 
@@ -19,6 +21,7 @@ Use `stan_ai_client` when you want:
 
 - a small Python API on top of Claude Code
 - text mode and JSON mode without hand-rolling subprocess logic
+- strongly guided structured output with local validation
 - command metadata, typed JSON payloads, and normalized exceptions
 - safe-by-default prompt logging behavior
 - local automation that already depends on Claude Code being installed
@@ -104,6 +107,37 @@ print(result.payload.total_cost_usd)
 print(result.payload.session_id)
 ```
 
+### Structured mode
+
+```python
+from stan_ai_client import ClaudeCodeClient, StructuredSchema
+
+client = ClaudeCodeClient()
+
+schema = StructuredSchema.from_dict(
+    {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["summary", "tags"],
+        "additionalProperties": False,
+    }
+)
+
+result = client.run_structured(
+    "Summarize this article and return tags.",
+    schema=schema,
+)
+
+print(result.structured_output["summary"])
+print(result.payload.session_id)
+print(result.payload.total_cost_usd)
+```
+
+`run_structured()` validates the schema before Claude runs, requires `structured_output` in the response, and validates the returned object locally against the same schema.
+
 ### Logging
 
 ```python
@@ -148,14 +182,19 @@ from stan_ai_client import (
     RunOptions,
     TextRunResult,
     JsonRunResult,
+    StructuredRunResult,
     ClaudeJsonPayload,
     CommandMetadata,
+    StructuredSchema,
     ClaudeCodeError,
     ClaudeExecutableNotFoundError,
     ClaudeTimeoutError,
     ClaudeProcessError,
     ClaudeProtocolError,
     ClaudeRateLimitError,
+    ClaudeSchemaValidationError,
+    ClaudeStructuredOutputMissingError,
+    ClaudeStructuredOutputValidationError,
     RateLimitInfo,
     parse_rate_limit_info,
 )
@@ -165,6 +204,7 @@ from stan_ai_client import (
 
 - text mode via `run_text()`
 - JSON mode via `run_json()`
+- structured mode via `run_structured()`
 - prompts sent over stdin by default
 - optional argv prompt mode
 - per-call working directory control
@@ -173,6 +213,7 @@ from stan_ai_client import (
 - raw stdout and stderr preserved on results and errors
 - opt-in stdlib logging with safe default prompt handling
 - typed JSON payload parsing with unknown fields preserved in `extras`
+- local input and output validation for structured mode
 - rate-limit detection and reset-time parsing
 
 ## Examples
@@ -189,6 +230,7 @@ See [DOCS.md](./DOCS.md) for:
 - full `RunOptions` reference
 - logging behavior
 - result types
+- structured output usage
 - exception model
 - rate-limit handling
 - session usage
@@ -199,6 +241,7 @@ See [DOCS.md](./DOCS.md) for:
 
 - prompts default to stdin instead of argv
 - JSON mode always requests `--output-format json`
+- structured mode always requests `--output-format json` and `--json-schema`
 - text mode always requests `--output-format text`
 - logging uses stdlib `logging`
 - prompts are not written to logs unless `log_prompts=True`
@@ -212,6 +255,7 @@ See [DOCS.md](./DOCS.md) for:
 - no built-in retry loop
 - no standalone CLI wrapper command
 - no first-class typed wrapper yet for every Claude Code flag
+- structured mode accepts dict-backed JSON Schema objects only
 
 For unsupported Claude Code flags, use `RunOptions(extra_args=...)`.
 

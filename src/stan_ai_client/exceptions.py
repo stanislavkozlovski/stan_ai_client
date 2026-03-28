@@ -8,6 +8,10 @@ class ClaudeCodeError(RuntimeError):
     pass
 
 
+class ClaudeSchemaValidationError(ClaudeCodeError):
+    pass
+
+
 class ClaudeExecutableNotFoundError(ClaudeCodeError):
     def __init__(self, executable: str) -> None:
         self.executable = executable
@@ -48,6 +52,36 @@ class ClaudeProtocolError(ClaudeCodeError):
         super().__init__(message)
 
 
+class ClaudeStructuredOutputMissingError(ClaudeProtocolError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        command: CommandMetadata,
+        stdout: str,
+        stderr: str,
+        payload: ClaudeJsonPayload,
+    ) -> None:
+        self.payload = payload
+        super().__init__(message, command=command, stdout=stdout, stderr=stderr)
+
+
+class ClaudeStructuredOutputValidationError(ClaudeProtocolError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        command: CommandMetadata,
+        stdout: str,
+        stderr: str,
+        payload: ClaudeJsonPayload,
+        structured_output: object,
+    ) -> None:
+        self.payload = payload
+        self.structured_output = structured_output
+        super().__init__(message, command=command, stdout=stdout, stderr=stderr)
+
+
 class ClaudeRateLimitError(ClaudeProcessError):
     def __init__(
         self,
@@ -69,4 +103,3 @@ class ClaudeRateLimitError(ClaudeProcessError):
             stderr=stderr,
             payload=payload,
         )
-
