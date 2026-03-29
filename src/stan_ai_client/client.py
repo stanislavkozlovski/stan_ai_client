@@ -6,17 +6,22 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
-from typing import Mapping
+from typing import Any, Mapping, TypeVar
+
+from jsonschema.exceptions import ValidationError
 
 from .exceptions import (
     ClaudeExecutableNotFoundError,
     ClaudeProcessError,
     ClaudeProtocolError,
     ClaudeRateLimitError,
+    ClaudeStructuredOutputMissingError,
+    ClaudeStructuredOutputValidationError,
     ClaudeTimeoutError,
 )
 from .parser import summarize_error_text, try_parse_json_payload
 from .rate_limits import is_rate_limit_text, parse_rate_limit_info
+from .schema import StructuredSchema
 from .transport import PreparedCommand, execute_command
 from .types import (
     ClaudeJsonPayload,
@@ -24,6 +29,7 @@ from .types import (
     Effort,
     JsonRunResult,
     RunOptions,
+    StructuredRunResult,
     TextRunResult,
 )
 
@@ -34,6 +40,8 @@ REDACTED_ARG_FLAGS = {
     "--settings",
     "--system-prompt",
 }
+JSON_SCHEMA_ARG_FLAG = "--json-schema"
+TStructured = TypeVar("TStructured")
 
 
 @dataclass(frozen=True)
@@ -123,60 +131,89 @@ class ClaudeCodeClient:
     def run_json(self, prompt: str, *, options: RunOptions | None = None) -> JsonRunResult:
         prepared, effective = self._prepare(prompt, output_format="json", options=options)
         self._log_start(prompt, output_format="json", prepared=prepared, effective=effective)
-        completed, metadata = self._execute(prepared)
-        stdout = completed.stdout
-        stderr = completed.stderr
-        payload = try_parse_json_payload(stdout)
-
-        if completed.returncode != 0:
-            raise self._build_process_error(
-                metadata,
-                returncode=completed.returncode,
-                stdout=stdout,
-                stderr=stderr,
-                payload=payload,
-            )
-
-        if payload is None:
-            if not stdout.strip():
-                error = ClaudeProtocolError(
-                    "Claude returned empty output in JSON mode",
-                    command=metadata,
-                    stdout=stdout,
-                    stderr=stderr,
-                )
-                self._log_protocol_error(error)
-                raise error
-            error = ClaudeProtocolError(
-                f"Claude returned non-JSON output in JSON mode: {stdout.strip()[:500]}",
-                command=metadata,
-                stdout=stdout,
-                stderr=stderr,
-            )
-            self._log_protocol_error(error)
-            raise error
-
-        if payload.is_error:
-            raise self._build_process_error(
-                metadata,
-                returncode=completed.returncode,
-                stdout=stdout,
-                stderr=stderr,
-                payload=payload,
-            )
+        completed, metadata, payload = self._execute_json(prepared, protocol_name="JSON mode")
 
         result = JsonRunResult(
             command=metadata,
-            stdout=stdout,
-            stderr=stderr,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
             returncode=completed.returncode,
             payload=payload,
         )
         self._log_finish(
             output_format="json",
             metadata=metadata,
-            stdout=stdout,
-            stderr=stderr,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            payload=payload,
+        )
+        return result
+
+    def run_structured(
+        self,
+        prompt: str,
+        *,
+        schema: StructuredSchema[TStructured],
+        options: RunOptions | None = None,
+    ) -> StructuredRunResult[TStructured]:
+        prepared, effective = self._prepare(
+            prompt,
+            output_format="json",
+            options=options,
+            json_schema=schema,
+        )
+        self._log_start(prompt, output_format="json", prepared=prepared, effective=effective)
+        self.logger.debug("Claude structured mode enabled schema_validated_locally=True")
+
+        completed, metadata, payload = self._execute_json(
+            prepared,
+            protocol_name="structured mode",
+        )
+
+        if not payload.has_structured_output:
+            self.logger.debug("Claude structured_output missing")
+            missing_error = ClaudeStructuredOutputMissingError(
+                "Claude did not return structured_output in structured mode",
+                command=metadata,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+                payload=payload,
+            )
+            self._log_protocol_error(missing_error)
+            raise missing_error
+
+        self.logger.debug("Claude structured_output present")
+
+        try:
+            structured_output = schema.validate_response(payload.structured_output)
+        except ValidationError as exc:
+            self.logger.debug("Claude structured_output validation failed error=%s", exc.message)
+            validation_error = ClaudeStructuredOutputValidationError(
+                f"Claude returned structured_output that does not match the schema: {exc.message}",
+                command=metadata,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+                payload=payload,
+                structured_output=payload.structured_output,
+            )
+            self._log_protocol_error(validation_error)
+            raise validation_error from exc
+
+        self.logger.debug("Claude structured_output validation succeeded")
+
+        result = StructuredRunResult(
+            command=metadata,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            returncode=completed.returncode,
+            payload=payload,
+            structured_output=structured_output,
+        )
+        self._log_finish(
+            output_format="json",
+            metadata=metadata,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
             payload=payload,
         )
         return result
@@ -187,6 +224,7 @@ class ClaudeCodeClient:
         *,
         output_format: str,
         options: RunOptions | None,
+        json_schema: StructuredSchema[Any] | None = None,
     ) -> tuple[PreparedCommand, ResolvedRunOptions]:
         effective = self._resolve_options(options)
         argv = [self.executable]
@@ -204,6 +242,8 @@ class ClaudeCodeClient:
 
         argv.append("-p")
         argv.extend(["--output-format", output_format])
+        if json_schema is not None:
+            argv.extend(["--json-schema", json_schema.cli_json])
         argv.extend(["--model", effective.model])
         argv.extend(["--effort", effective.effort])
 
@@ -246,6 +286,47 @@ class ClaudeCodeClient:
             env=merged_env,
         )
         return prepared, effective
+
+    def _execute_json(
+        self,
+        prepared: PreparedCommand,
+        *,
+        protocol_name: str,
+    ) -> tuple[CompletedProcess[str], CommandMetadata, ClaudeJsonPayload]:
+        completed, metadata = self._execute(prepared)
+        stdout = completed.stdout
+        stderr = completed.stderr
+        payload = try_parse_json_payload(stdout)
+
+        if completed.returncode != 0:
+            raise self._build_process_error(
+                metadata,
+                returncode=completed.returncode,
+                stdout=stdout,
+                stderr=stderr,
+                payload=payload,
+            )
+
+        if payload is None:
+            error = self._build_json_protocol_error(
+                metadata,
+                stdout=stdout,
+                stderr=stderr,
+                protocol_name=protocol_name,
+            )
+            self._log_protocol_error(error)
+            raise error
+
+        if payload.is_error:
+            raise self._build_process_error(
+                metadata,
+                returncode=completed.returncode,
+                stdout=stdout,
+                stderr=stderr,
+                payload=payload,
+            )
+
+        return completed, metadata, payload
 
     def _execute(
         self, prepared: PreparedCommand
@@ -469,18 +550,45 @@ class ClaudeCodeClient:
             str(error),
         )
 
+    def _build_json_protocol_error(
+        self,
+        command: CommandMetadata,
+        *,
+        stdout: str,
+        stderr: str,
+        protocol_name: str,
+    ) -> ClaudeProtocolError:
+        if not stdout.strip():
+            return ClaudeProtocolError(
+                f"Claude returned empty output in {protocol_name}",
+                command=command,
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+        return ClaudeProtocolError(
+            f"Claude returned non-JSON output in {protocol_name}: {stdout.strip()[:500]}",
+            command=command,
+            stdout=stdout,
+            stderr=stderr,
+        )
+
 
 def _redact_argv(argv: tuple[str, ...], *, prompt_in_argv: bool) -> tuple[str, ...]:
     redacted: list[str] = []
-    redact_next = False
+    replacement_for_next: str | None = None
     for index, value in enumerate(argv):
-        if redact_next:
-            redacted.append("<redacted>")
-            redact_next = False
+        if replacement_for_next is not None:
+            redacted.append(replacement_for_next)
+            replacement_for_next = None
             continue
         if value in REDACTED_ARG_FLAGS:
             redacted.append(value)
-            redact_next = True
+            replacement_for_next = "<redacted>"
+            continue
+        if value == JSON_SCHEMA_ARG_FLAG:
+            redacted.append(value)
+            replacement_for_next = "<json-schema>"
             continue
         if prompt_in_argv and index == len(argv) - 1:
             redacted.append("<prompt>")

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Generic, Literal, Mapping, TypeVar
 
 Effort = Literal["low", "medium", "high", "max"]
 PermissionMode = Literal[
@@ -14,6 +14,7 @@ PermissionMode = Literal[
     "auto",
 ]
 InputMode = Literal["stdin", "argv"]
+TStructured = TypeVar("TStructured")
 
 
 @dataclass(frozen=True)
@@ -57,11 +58,17 @@ class ClaudeJsonPayload:
     stop_reason: str | None
     session_id: str | None
     total_cost_usd: float | None
+    structured_output: Any | None
     usage: dict[str, Any]
     model_usage: dict[str, dict[str, Any]]
     permission_denials: list[str]
     uuid: str | None
     extras: dict[str, Any]
+    _structured_output_present: bool = field(default=False, repr=False)
+
+    @property
+    def has_structured_output(self) -> bool:
+        return self._structured_output_present
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ClaudeJsonPayload":
@@ -76,6 +83,7 @@ class ClaudeJsonPayload:
             "stop_reason",
             "session_id",
             "total_cost_usd",
+            "structured_output",
             "usage",
             "modelUsage",
             "permission_denials",
@@ -95,6 +103,7 @@ class ClaudeJsonPayload:
             stop_reason=data.get("stop_reason"),
             session_id=data.get("session_id"),
             total_cost_usd=data.get("total_cost_usd"),
+            structured_output=data.get("structured_output"),
             usage=raw_usage if isinstance(raw_usage, dict) else {},
             model_usage=raw_model_usage if isinstance(raw_model_usage, dict) else {},
             permission_denials=(
@@ -102,6 +111,7 @@ class ClaudeJsonPayload:
             ),
             uuid=data.get("uuid"),
             extras={key: value for key, value in data.items() if key not in used},
+            _structured_output_present="structured_output" in data,
         )
 
 
@@ -122,3 +132,12 @@ class JsonRunResult:
     returncode: int
     payload: ClaudeJsonPayload
 
+
+@dataclass(frozen=True)
+class StructuredRunResult(Generic[TStructured]):
+    command: CommandMetadata
+    stdout: str
+    stderr: str
+    returncode: int
+    payload: ClaudeJsonPayload
+    structured_output: TStructured

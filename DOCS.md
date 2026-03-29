@@ -8,7 +8,7 @@ It is designed for scriptable Claude Code usage where:
 
 - Claude Code is already installed locally
 - the caller wants a Python API instead of manual subprocess handling
-- text mode or JSON mode is enough
+- text mode, JSON mode, or structured mode is enough
 - structured error handling matters
 - stdlib logging is sufficient
 
@@ -63,6 +63,13 @@ class ClaudeCodeClient:
 
     def run_text(self, prompt: str, *, options: RunOptions | None = None) -> TextRunResult: ...
     def run_json(self, prompt: str, *, options: RunOptions | None = None) -> JsonRunResult: ...
+    def run_structured(
+        self,
+        prompt: str,
+        *,
+        schema: StructuredSchema[TStructured],
+        options: RunOptions | None = None,
+    ) -> StructuredRunResult[TStructured]: ...
 ```
 
 ### Constructor behavior
@@ -72,6 +79,32 @@ class ClaudeCodeClient:
 - `default_options` lets you set a reusable baseline that per-call options can override.
 - `logger` lets you provide a stdlib logger for client execution logs.
 - `log_prompts` controls whether full prompt text is logged at debug level.
+
+### `StructuredSchema`
+
+`StructuredSchema` is the guided entry point for structured mode.
+
+```python
+from stan_ai_client import StructuredSchema
+
+schema = StructuredSchema.from_dict(
+    {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+        },
+        "required": ["summary"],
+        "additionalProperties": False,
+    }
+)
+```
+
+Behavior:
+
+- accepts dict-backed JSON Schema objects only
+- validates the schema locally before any Claude subprocess starts
+- stores the compact CLI JSON string once
+- validates returned `structured_output` against the same schema
 
 ## Logging
 
@@ -106,6 +139,9 @@ At `DEBUG`:
 
 - redacted argv
 - parsed JSON payload metadata when available
+- structured mode enabled
+- whether `structured_output` was present
+- whether structured-output validation succeeded or failed
 - full prompt text only if `log_prompts=True`
 
 At `WARNING` or `ERROR`:
@@ -280,6 +316,45 @@ JSON mode requires valid JSON output:
 - non-JSON output raises `ClaudeProtocolError`
 - JSON payloads with `is_error=true` raise `ClaudeProcessError` or `ClaudeRateLimitError`
 
+### Structured mode
+
+Use `run_structured()` when you want Claude’s JSON envelope plus a validated `structured_output`.
+
+```python
+from stan_ai_client import ClaudeCodeClient, StructuredSchema
+
+client = ClaudeCodeClient()
+schema = StructuredSchema.from_dict(
+    {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["summary", "tags"],
+        "additionalProperties": False,
+    }
+)
+
+result = client.run_structured(
+    "Summarize this article and return tags.",
+    schema=schema,
+)
+
+print(result.structured_output)
+print(result.payload.session_id)
+print(result.payload.total_cost_usd)
+```
+
+Structured mode behavior:
+
+- validates the input schema locally before Claude runs
+- requests Claude JSON mode and passes `--json-schema`
+- requires `structured_output` to be present in the JSON envelope
+- does not fall back to `payload.result`
+- validates the returned `structured_output` locally against the same schema
+- preserves the full Claude envelope through `result.payload`
+
 ## Result Types
 
 ### `CommandMetadata`
@@ -323,6 +398,19 @@ class JsonRunResult:
     payload: ClaudeJsonPayload
 ```
 
+### `StructuredRunResult[TStructured]`
+
+```python
+@dataclass(frozen=True)
+class StructuredRunResult(Generic[TStructured]):
+    command: CommandMetadata
+    stdout: str
+    stderr: str
+    returncode: int
+    payload: ClaudeJsonPayload
+    structured_output: TStructured
+```
+
 ### `ClaudeJsonPayload`
 
 Currently parsed fields:
@@ -337,6 +425,7 @@ Currently parsed fields:
 - `stop_reason`
 - `session_id`
 - `total_cost_usd`
+- `structured_output`
 - `usage`
 - `model_usage`
 - `permission_denials`
@@ -386,6 +475,33 @@ Carries:
 - `command`
 - `stdout`
 - `stderr`
+
+### `ClaudeSchemaValidationError`
+
+Raised when `StructuredSchema.from_dict(...)` receives a non-dict input or an invalid JSON Schema.
+
+### `ClaudeStructuredOutputMissingError`
+
+Raised when structured mode succeeds at the process level but Claude does not return `structured_output`.
+
+Carries:
+
+- `command`
+- `stdout`
+- `stderr`
+- `payload`
+
+### `ClaudeStructuredOutputValidationError`
+
+Raised when Claude returns `structured_output` but it does not validate against the provided schema.
+
+Carries:
+
+- `command`
+- `stdout`
+- `stderr`
+- `payload`
+- `structured_output`
 
 ### `ClaudeRateLimitError`
 
@@ -544,6 +660,8 @@ Current command construction behavior:
 
 - text mode always requests `--output-format text`
 - JSON mode always requests `--output-format json`
+- structured mode always requests `--output-format json`
+- structured mode adds `--json-schema <compact-json>`
 - both modes always use `claude -p`
 - prompt goes over stdin by default
 - `argv` mode appends the prompt directly to argv
@@ -577,6 +695,7 @@ mypy src tests
 - no built-in retry loop
 - no standalone CLI wrapper command
 - no first-class typed flags yet for every Claude Code option
+- structured mode accepts dict-backed JSON Schema only
 
 For unsupported Claude CLI flags, use `extra_args`.
 
