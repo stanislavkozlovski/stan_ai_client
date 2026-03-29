@@ -22,6 +22,12 @@ It does not:
 ## Installation
 
 ```bash
+pip install stan-ai-client
+```
+
+For local development:
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -32,6 +38,43 @@ Verify Claude Code is available:
 ```bash
 claude --version
 ```
+
+## Versioning And Releases
+
+Versioning is intentionally simple:
+
+- `pyproject.toml` is the source of truth
+- each non-bot push or merge to `main` bumps patch by `0.0.1`
+- releases are tagged as `vX.Y.Z`
+- the release workflow builds distributions and publishes them to PyPI
+
+The package also exposes its installed version at runtime:
+
+```python
+from stan_ai_client import __version__
+
+print(__version__)
+```
+
+## Maintainer Release Flow
+
+The repository uses one GitHub Actions workflow at `.github/workflows/ci.yml`.
+
+Behavior:
+
+- pull requests run lint, mypy, and tests
+- pushes to `main` run the same checks
+- after checks pass on `main`, GitHub Actions:
+  - bumps `pyproject.toml`
+  - creates a release commit
+  - tags the release
+  - builds `sdist` and `wheel`
+  - publishes to PyPI via Trusted Publishing
+
+One manual prerequisite exists outside the repo:
+
+- PyPI must be configured to trust this GitHub repository and the `.github/workflows/ci.yml` workflow before the first publish
+- if you configure a GitHub environment claim on PyPI, use `pypi`
 
 ## First Run
 
