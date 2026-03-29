@@ -37,6 +37,12 @@ It is not a replacement for the Anthropic API SDK, and it is not trying to abstr
 
 ## Install
 
+### From PyPI
+
+```bash
+pip install stan-ai-client
+```
+
 ### From a local checkout
 
 ```bash
@@ -50,6 +56,14 @@ pip install -e ".[dev]"
 ```bash
 pip install "git+https://github.com/<your-user>/stan_ai_client.git"
 ```
+
+## Releases
+
+- the package version lives in `pyproject.toml`
+- every non-bot push or merge to `main` bumps patch automatically
+- tags use `vX.Y.Z`
+- `main` releases build and publish to PyPI automatically
+- release commits are created by GitHub Actions as `chore: release vX.Y.Z [skip ci]`
 
 ## Quickstart
 
@@ -178,6 +192,7 @@ Top-level exports:
 
 ```python
 from stan_ai_client import (
+    __version__,
     ClaudeCodeClient,
     RunOptions,
     TextRunResult,
@@ -236,6 +251,7 @@ See [DOCS.md](./DOCS.md) for:
 - session usage
 - common patterns
 - current limitations
+- maintainer release flow
 
 ## Notes
 

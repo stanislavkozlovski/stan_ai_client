@@ -1,3 +1,4 @@
+from ._version import get_version
 from .client import ClaudeCodeClient
 from .exceptions import (
     ClaudeCodeError,
@@ -21,7 +22,10 @@ from .types import (
     TextRunResult,
 )
 
+__version__ = get_version()
+
 __all__ = [
+    "__version__",
     "ClaudeCodeClient",
     "ClaudeCodeError",
     "ClaudeExecutableNotFoundError",

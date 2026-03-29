@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from .types import ClaudeJsonPayload
 
@@ -36,4 +35,3 @@ def summarize_error_text(
     if stderr.strip():
         return stderr.strip()[:500]
     return stdout.strip()[:500]
-
