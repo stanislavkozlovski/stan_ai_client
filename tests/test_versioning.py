@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 
@@ -50,5 +51,5 @@ def test_bump_patch_version_rejects_non_semver() -> None:
         bump_patch_version("0.1.0.dev1")
 
 
-def _raise_package_not_found(_: str) -> str:
-    raise PackageNotFoundError
+def _raise_package_not_found(_: str) -> NoReturn:
+    raise PackageNotFoundError("stan-ai-client")
