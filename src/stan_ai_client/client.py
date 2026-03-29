@@ -40,6 +40,7 @@ REDACTED_ARG_FLAGS = {
     "--settings",
     "--system-prompt",
 }
+JSON_SCHEMA_ARG_FLAG = "--json-schema"
 TStructured = TypeVar("TStructured")
 
 
@@ -575,15 +576,19 @@ class ClaudeCodeClient:
 
 def _redact_argv(argv: tuple[str, ...], *, prompt_in_argv: bool) -> tuple[str, ...]:
     redacted: list[str] = []
-    redact_next = False
+    replacement_for_next: str | None = None
     for index, value in enumerate(argv):
-        if redact_next:
-            redacted.append("<redacted>")
-            redact_next = False
+        if replacement_for_next is not None:
+            redacted.append(replacement_for_next)
+            replacement_for_next = None
             continue
         if value in REDACTED_ARG_FLAGS:
             redacted.append(value)
-            redact_next = True
+            replacement_for_next = "<redacted>"
+            continue
+        if value == JSON_SCHEMA_ARG_FLAG:
+            redacted.append(value)
+            replacement_for_next = "<json-schema>"
             continue
         if prompt_in_argv and index == len(argv) - 1:
             redacted.append("<prompt>")

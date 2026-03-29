@@ -229,6 +229,42 @@ def test_logging_can_include_prompt_text_when_enabled(
     assert "Claude prompt=super secret prompt" in caplog.text
 
 
+def test_logging_redacts_json_schema_in_debug_argv(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"result":"ok","structured_output":{"summary":"brief"}}',
+            stderr="",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    logger = logging.getLogger("stan_ai_client.tests.schema_logging")
+    caplog.set_level(logging.DEBUG, logger=logger.name)
+
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string"},
+            },
+            "required": ["summary"],
+            "additionalProperties": False,
+        }
+    )
+
+    client = ClaudeCodeClient(logger=logger)
+    client.run_structured("summarize this", schema=schema)
+
+    assert "--json-schema" in caplog.text
+    assert "<json-schema>" in caplog.text
+    assert schema.cli_json not in caplog.text
+
+
 def test_run_structured_passes_schema_and_returns_validated_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
