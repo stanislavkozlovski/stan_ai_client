@@ -546,9 +546,20 @@ Carries:
 - `payload`
 - `structured_output`
 
+### `ClaudeLimitError`
+
+Specialized `ClaudeProcessError` for Claude usage or rate limits.
+
+Carries everything from `ClaudeProcessError` plus:
+
+- `limit`
+- `rate_limit`
+- `retry_after_seconds`
+- `reset_at`
+
 ### `ClaudeRateLimitError`
 
-Specialized `ClaudeProcessError` for rate limits.
+Backward-compatible subclass of `ClaudeLimitError`.
 
 Carries everything from `ClaudeProcessError` plus:
 
@@ -582,15 +593,15 @@ Supported patterns:
 ### Example
 
 ```python
-from stan_ai_client import ClaudeCodeClient, ClaudeRateLimitError
+from stan_ai_client import ClaudeCodeClient, ClaudeLimitError
 
 client = ClaudeCodeClient()
 
 try:
     result = client.run_json("Summarize this article.")
-except ClaudeRateLimitError as exc:
-    print(exc.rate_limit.retry_after_seconds)
-    print(exc.rate_limit.reset_at)
+except ClaudeLimitError as exc:
+    print(exc.retry_after_seconds)
+    print(exc.reset_at)
 ```
 
 ## Session Usage

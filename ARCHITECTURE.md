@@ -48,7 +48,7 @@ Structured mode preserves the full Claude envelope through `result.payload`, inc
 - `src/stan_ai_client/parser.py`: JSON payload parsing helpers
 - `src/stan_ai_client/types.py`: request, payload, and result dataclasses
 - `src/stan_ai_client/schema.py`: `StructuredSchema` and JSON Schema validation
-- `src/stan_ai_client/exceptions.py`: library exception hierarchy
+- `src/stan_ai_client/exceptions.py`: library exception hierarchy, including structured limit errors with parsed reset timestamps
 - `src/stan_ai_client/rate_limits.py`: rate-limit parsing helpers
 
 ## Logging

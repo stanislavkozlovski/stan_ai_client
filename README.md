@@ -175,15 +175,15 @@ By default, logging includes execution metadata, not full prompt text. Set `log_
 ### Error handling
 
 ```python
-from stan_ai_client import ClaudeCodeClient, ClaudeRateLimitError
+from stan_ai_client import ClaudeCodeClient, ClaudeLimitError
 
 client = ClaudeCodeClient()
 
 try:
     result = client.run_json("Summarize this repository.")
-except ClaudeRateLimitError as exc:
-    print(exc.rate_limit.retry_after_seconds)
-    print(exc.rate_limit.reset_at)
+except ClaudeLimitError as exc:
+    print(exc.retry_after_seconds)
+    print(exc.reset_at)
 ```
 
 ## Public Surface
@@ -203,6 +203,7 @@ from stan_ai_client import (
     StructuredSchema,
     ClaudeCodeError,
     ClaudeExecutableNotFoundError,
+    ClaudeLimitError,
     ClaudeTimeoutError,
     ClaudeProcessError,
     ClaudeProtocolError,

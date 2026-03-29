@@ -10,6 +10,7 @@ import pytest
 from stan_ai_client import (
     ClaudeCodeClient,
     ClaudeExecutableNotFoundError,
+    ClaudeLimitError,
     ClaudeProcessError,
     ClaudeProtocolError,
     ClaudeRateLimitError,
@@ -166,6 +167,26 @@ def test_run_json_raises_rate_limit_error(monkeypatch: pytest.MonkeyPatch) -> No
         client.run_json("hello")
 
     assert excinfo.value.rate_limit.retry_after_seconds == 3630
+
+
+def test_run_json_raises_limit_error_for_hit_your_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout='{"is_error": true, "result": "You\'ve hit your limit · resets 1am (Europe/Sofia)"}',
+            stderr="",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    client = ClaudeCodeClient()
+    with pytest.raises(ClaudeLimitError) as excinfo:
+        client.run_json("hello")
+
+    assert isinstance(excinfo.value, ClaudeRateLimitError)
+    assert excinfo.value.reset_at is not None
+    assert excinfo.value.rate_limit.reset_at == excinfo.value.reset_at
 
 
 def test_missing_executable_is_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
