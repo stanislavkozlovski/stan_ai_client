@@ -174,16 +174,23 @@ By default, logging includes execution metadata, not full prompt text. Set `log_
 
 ### Error handling
 
+If you automate Claude Code, treat `ClaudeLimitError` as a normal control-flow case: wait until `exc.reset_at` or sleep `exc.retry_after_seconds`, then retry.
+
 ```python
+import time
+
 from stan_ai_client import ClaudeCodeClient, ClaudeLimitError
 
 client = ClaudeCodeClient()
 
-try:
-    result = client.run_json("Summarize this repository.")
-except ClaudeLimitError as exc:
-    print(exc.retry_after_seconds)
-    print(exc.reset_at)
+for attempt in range(3):
+    try:
+        result = client.run_json("Summarize this repository.")
+        break
+    except ClaudeLimitError as exc:
+        if attempt == 2 or exc.retry_after_seconds is None:
+            raise
+        time.sleep(exc.retry_after_seconds)
 ```
 
 ## Public Surface
