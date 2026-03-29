@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from .rate_limits import RateLimitInfo
 from .types import ClaudeJsonPayload, CommandMetadata
 
@@ -82,7 +84,39 @@ class ClaudeStructuredOutputValidationError(ClaudeProtocolError):
         super().__init__(message, command=command, stdout=stdout, stderr=stderr)
 
 
-class ClaudeRateLimitError(ClaudeProcessError):
+class ClaudeLimitError(ClaudeProcessError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        command: CommandMetadata,
+        returncode: int,
+        stdout: str,
+        stderr: str,
+        payload: ClaudeJsonPayload | None,
+        limit: RateLimitInfo,
+    ) -> None:
+        self.limit = limit
+        self.rate_limit = limit
+        super().__init__(
+            message,
+            command=command,
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+            payload=payload,
+        )
+
+    @property
+    def retry_after_seconds(self) -> int | None:
+        return self.limit.retry_after_seconds
+
+    @property
+    def reset_at(self) -> datetime | None:
+        return self.limit.reset_at
+
+
+class ClaudeRateLimitError(ClaudeLimitError):
     def __init__(
         self,
         message: str,
@@ -94,7 +128,6 @@ class ClaudeRateLimitError(ClaudeProcessError):
         payload: ClaudeJsonPayload | None,
         rate_limit: RateLimitInfo,
     ) -> None:
-        self.rate_limit = rate_limit
         super().__init__(
             message,
             command=command,
@@ -102,4 +135,5 @@ class ClaudeRateLimitError(ClaudeProcessError):
             stdout=stdout,
             stderr=stderr,
             payload=payload,
+            limit=rate_limit,
         )

@@ -3,6 +3,7 @@ from .client import ClaudeCodeClient
 from .exceptions import (
     ClaudeCodeError,
     ClaudeExecutableNotFoundError,
+    ClaudeLimitError,
     ClaudeProcessError,
     ClaudeProtocolError,
     ClaudeRateLimitError,
@@ -30,6 +31,7 @@ __all__ = [
     "ClaudeCodeError",
     "ClaudeExecutableNotFoundError",
     "ClaudeJsonPayload",
+    "ClaudeLimitError",
     "ClaudeProcessError",
     "ClaudeProtocolError",
     "ClaudeRateLimitError",

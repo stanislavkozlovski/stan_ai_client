@@ -30,3 +30,14 @@ def test_parse_absolute_local_time() -> None:
     assert info.reset_at.hour == 15
     assert info.reset_at.minute == 0
 
+
+def test_parse_embedded_timezone_without_losing_case() -> None:
+    reference = datetime(2026, 3, 19, 20, 30, tzinfo=ZoneInfo("UTC"))
+    info = parse_rate_limit_info(
+        "You've hit your limit · resets 1am (Europe/Sofia)",
+        now=reference,
+    )
+
+    assert info.reset_at is not None
+    assert info.retry_after_seconds == 9000
+    assert info.reset_at == datetime(2026, 3, 19, 23, 0, tzinfo=ZoneInfo("UTC"))

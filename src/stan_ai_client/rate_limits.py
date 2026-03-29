@@ -12,6 +12,9 @@ RATE_LIMIT_MARKERS = (
     "429",
     "too many requests",
     "overloaded",
+    "hit your limit",
+    "usage limit",
+    "limit reached",
 )
 
 
@@ -24,7 +27,9 @@ class RateLimitInfo:
 
 def is_rate_limit_text(text: str) -> bool:
     lower = text.lower()
-    return any(marker in lower for marker in RATE_LIMIT_MARKERS)
+    return any(marker in lower for marker in RATE_LIMIT_MARKERS) or (
+        "limit" in lower and "reset" in lower
+    )
 
 
 def parse_rate_limit_info(
@@ -38,7 +43,7 @@ def parse_rate_limit_info(
         reference = reference.astimezone(local_tz)
 
     lower = text.lower()
-    tz = _extract_embedded_timezone(lower)
+    tz = _extract_embedded_timezone(text)
     reset_at = _parse_absolute_reset(lower, reference, tz, local_tz)
     if reset_at is None:
         reset_at = _parse_relative_reset(lower, reference)
@@ -164,4 +169,3 @@ def _time_str_to_datetime(
         return target
 
     return None
-
