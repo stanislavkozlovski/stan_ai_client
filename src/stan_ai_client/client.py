@@ -315,10 +315,7 @@ class ClaudeCodeClient:
                     exc.reset_at,
                     rate_limit_policy.label,
                 )
-                self._sleep(wait_seconds_float)
-
-    def _sleep(self, seconds: float) -> None:
-        time.sleep(seconds)
+                time.sleep(wait_seconds_float)
 
     def _prepare(
         self,

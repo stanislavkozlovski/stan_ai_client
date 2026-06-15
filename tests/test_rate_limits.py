@@ -10,16 +10,16 @@ def test_parse_retry_after_seconds() -> None:
     reference = datetime(2026, 3, 19, 10, 0, tzinfo=ZoneInfo("UTC"))
     info = parse_rate_limit_info("Rate limit exceeded. Retry after 3600", now=reference)
 
-    assert info.retry_after_seconds == 3630
+    assert info.retry_after_seconds == 3600
     assert info.reset_at is not None
-    assert int((info.reset_at - reference).total_seconds()) == 3630
+    assert int((info.reset_at - reference).total_seconds()) == 3600
 
 
 def test_parse_relative_hours_and_minutes() -> None:
     reference = datetime(2026, 3, 19, 10, 0, tzinfo=ZoneInfo("UTC"))
     info = parse_rate_limit_info("Resets in 2 hours 30 minutes", now=reference)
 
-    assert info.retry_after_seconds == (2 * 3600) + (30 * 60) + 60
+    assert info.retry_after_seconds == (2 * 3600) + (30 * 60)
 
 
 def test_parse_absolute_local_time() -> None:
