@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
-from typing import Any, Mapping, TypeVar
+from typing import Any, Callable, Mapping, TypeVar
 
 from jsonschema.exceptions import ValidationError
 
@@ -28,6 +28,7 @@ from .types import (
     CommandMetadata,
     Effort,
     JsonRunResult,
+    RateLimitRetryPolicy,
     RunOptions,
     StructuredRunResult,
     TextRunResult,
@@ -41,6 +42,7 @@ REDACTED_ARG_FLAGS = {
     "--system-prompt",
 }
 JSON_SCHEMA_ARG_FLAG = "--json-schema"
+TRun = TypeVar("TRun")
 TStructured = TypeVar("TStructured")
 
 
@@ -86,7 +88,19 @@ class ClaudeCodeClient:
         self.logger = logger or DEFAULT_LOGGER
         self.log_prompts = log_prompts
 
-    def run_text(self, prompt: str, *, options: RunOptions | None = None) -> TextRunResult:
+    def run_text(
+        self,
+        prompt: str,
+        *,
+        options: RunOptions | None = None,
+        rate_limit_policy: RateLimitRetryPolicy | None = None,
+    ) -> TextRunResult:
+        return self._run_with_rate_limit_policy(
+            lambda: self._run_text_once(prompt, options=options),
+            rate_limit_policy=rate_limit_policy,
+        )
+
+    def _run_text_once(self, prompt: str, *, options: RunOptions | None = None) -> TextRunResult:
         prepared, effective = self._prepare(prompt, output_format="text", options=options)
         self._log_start(prompt, output_format="text", prepared=prepared, effective=effective)
         completed, metadata = self._execute(prepared)
@@ -128,7 +142,19 @@ class ClaudeCodeClient:
         )
         return result
 
-    def run_json(self, prompt: str, *, options: RunOptions | None = None) -> JsonRunResult:
+    def run_json(
+        self,
+        prompt: str,
+        *,
+        options: RunOptions | None = None,
+        rate_limit_policy: RateLimitRetryPolicy | None = None,
+    ) -> JsonRunResult:
+        return self._run_with_rate_limit_policy(
+            lambda: self._run_json_once(prompt, options=options),
+            rate_limit_policy=rate_limit_policy,
+        )
+
+    def _run_json_once(self, prompt: str, *, options: RunOptions | None = None) -> JsonRunResult:
         prepared, effective = self._prepare(prompt, output_format="json", options=options)
         self._log_start(prompt, output_format="json", prepared=prepared, effective=effective)
         completed, metadata, payload = self._execute_json(prepared, protocol_name="JSON mode")
@@ -150,6 +176,19 @@ class ClaudeCodeClient:
         return result
 
     def run_structured(
+        self,
+        prompt: str,
+        *,
+        schema: StructuredSchema[TStructured],
+        options: RunOptions | None = None,
+        rate_limit_policy: RateLimitRetryPolicy | None = None,
+    ) -> StructuredRunResult[TStructured]:
+        return self._run_with_rate_limit_policy(
+            lambda: self._run_structured_once(prompt, schema=schema, options=options),
+            rate_limit_policy=rate_limit_policy,
+        )
+
+    def _run_structured_once(
         self,
         prompt: str,
         *,
@@ -217,6 +256,69 @@ class ClaudeCodeClient:
             payload=payload,
         )
         return result
+
+    def _run_with_rate_limit_policy(
+        self,
+        operation: Callable[[], TRun],
+        *,
+        rate_limit_policy: RateLimitRetryPolicy | None,
+    ) -> TRun:
+        if rate_limit_policy is None:
+            return operation()
+
+        total_wait_seconds = 0.0
+        attempt = 0
+
+        while True:
+            attempt += 1
+            try:
+                return operation()
+            except ClaudeRateLimitError as exc:
+                wait_seconds = exc.retry_after_seconds
+                if wait_seconds is None:
+                    self.logger.warning(
+                        "Claude rate limited but no retry metadata was parsed attempt=%d total_wait_seconds=%.1f max_wait_seconds=%s reset_at=%s label=%s",
+                        attempt,
+                        total_wait_seconds,
+                        rate_limit_policy.max_wait_seconds,
+                        exc.reset_at,
+                        rate_limit_policy.label,
+                    )
+                    raise
+
+                wait_seconds_float = float(wait_seconds)
+                if rate_limit_policy.max_wait_seconds is not None:
+                    remaining_wait_seconds = (
+                        rate_limit_policy.max_wait_seconds - total_wait_seconds
+                    )
+                    if wait_seconds_float > remaining_wait_seconds:
+                        self.logger.warning(
+                            "Claude rate limit exceeds wait budget attempt=%d wait_seconds=%.1f remaining_wait_seconds=%.1f total_wait_seconds=%.1f max_wait_seconds=%.1f reset_at=%s label=%s",
+                            attempt,
+                            wait_seconds_float,
+                            remaining_wait_seconds,
+                            total_wait_seconds,
+                            rate_limit_policy.max_wait_seconds,
+                            exc.reset_at,
+                            rate_limit_policy.label,
+                        )
+                        raise
+
+                total_wait_seconds += wait_seconds_float
+                self.logger.warning(
+                    "Claude rate limited; retrying after reset attempt=%d wait_seconds=%.1f total_wait_seconds=%.1f max_wait_seconds=%s retry_after_seconds=%s reset_at=%s label=%s",
+                    attempt,
+                    wait_seconds_float,
+                    total_wait_seconds,
+                    rate_limit_policy.max_wait_seconds,
+                    exc.retry_after_seconds,
+                    exc.reset_at,
+                    rate_limit_policy.label,
+                )
+                self._sleep(wait_seconds_float)
+
+    def _sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
 
     def _prepare(
         self,

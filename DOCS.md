@@ -17,7 +17,7 @@ It does not:
 - call Anthropic APIs directly
 - implement streaming
 - implement async execution
-- implement a retry loop or long-running job scheduler
+- implement a long-running job scheduler
 
 ## Installation
 
@@ -104,14 +104,27 @@ class ClaudeCodeClient:
         log_prompts: bool = False,
     ) -> None: ...
 
-    def run_text(self, prompt: str, *, options: RunOptions | None = None) -> TextRunResult: ...
-    def run_json(self, prompt: str, *, options: RunOptions | None = None) -> JsonRunResult: ...
+    def run_text(
+        self,
+        prompt: str,
+        *,
+        options: RunOptions | None = None,
+        rate_limit_policy: RateLimitRetryPolicy | None = None,
+    ) -> TextRunResult: ...
+    def run_json(
+        self,
+        prompt: str,
+        *,
+        options: RunOptions | None = None,
+        rate_limit_policy: RateLimitRetryPolicy | None = None,
+    ) -> JsonRunResult: ...
     def run_structured(
         self,
         prompt: str,
         *,
         schema: StructuredSchema[TStructured],
         options: RunOptions | None = None,
+        rate_limit_policy: RateLimitRetryPolicy | None = None,
     ) -> StructuredRunResult[TStructured]: ...
 ```
 
@@ -194,6 +207,7 @@ At `WARNING` or `ERROR`:
 - protocol errors
 - process errors
 - rate-limit details
+- rate-limit retry waits and wait-budget refusals
 
 ### Logging example
 
@@ -320,6 +334,52 @@ RunOptions(extra_args=("--debug", "--max-budget-usd", "1.50"))
 
 `env`
 - Additional environment variables merged on top of `os.environ`.
+
+## `RateLimitRetryPolicy`
+
+`RateLimitRetryPolicy` controls opt-in retry behavior for Claude rate-limit responses.
+
+```python
+@dataclass(frozen=True)
+class RateLimitRetryPolicy:
+    max_wait_seconds: float | None
+    label: str | None = None
+```
+
+Fields:
+
+`max_wait_seconds`
+- Maximum accumulated sleep time allowed for one client call.
+- `None` means wait for any parseable Claude reset.
+- `0` means only zero-second waits can retry.
+
+`label`
+- Optional human-readable context included in retry logs.
+- Use operation names such as `chapters pass1 chunk=12`.
+- Do not put prompt text or secrets in the label.
+
+Behavior:
+
+- Without a policy, rate limits raise `ClaudeRateLimitError` immediately.
+- With a policy, the client sleeps and retries only when `retry_after_seconds` was parsed.
+- If the next wait exceeds the remaining `max_wait_seconds` budget, the client re-raises the same `ClaudeRateLimitError`.
+- If Claude does not provide parseable retry/reset metadata, the client re-raises the same `ClaudeRateLimitError`.
+- Each retry sleep is logged at `WARNING`.
+
+Example:
+
+```python
+from stan_ai_client import ClaudeCodeClient, RateLimitRetryPolicy
+
+client = ClaudeCodeClient()
+result = client.run_json(
+    "Summarize this repository.",
+    rate_limit_policy=RateLimitRetryPolicy(
+        max_wait_seconds=5 * 60 * 60,
+        label="repo summary",
+    ),
+)
+```
 
 ## Execution Modes
 
@@ -593,15 +653,23 @@ Supported patterns:
 ### Example
 
 ```python
-from stan_ai_client import ClaudeCodeClient, ClaudeLimitError
+from stan_ai_client import ClaudeCodeClient, ClaudeRateLimitError, RateLimitRetryPolicy
 
 client = ClaudeCodeClient()
 
+result = client.run_json(
+    "Summarize this article.",
+    rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=5 * 60 * 60),
+)
+```
+
+For user-facing workflows where the application should not sleep, omit the policy and catch the typed error:
+
+```python
 try:
     result = client.run_json("Summarize this article.")
-except ClaudeLimitError as exc:
-    print(exc.retry_after_seconds)
-    print(exc.reset_at)
+except ClaudeRateLimitError as exc:
+    print(exc.reset_at or exc.retry_after_seconds)
 ```
 
 ## Session Usage
@@ -746,7 +814,7 @@ mypy src tests
 
 - no streaming support
 - no async API
-- no built-in retry loop
+- no background scheduler or persistent job queue
 - no standalone CLI wrapper command
 - no first-class typed flags yet for every Claude Code option
 - structured mode accepts dict-backed JSON Schema only
@@ -761,6 +829,5 @@ Keep these concerns outside the library:
 
 - prompt templates specific to one application
 - YAML or domain-object parsing
-- business retries and backoff policy
-- persistence
+- business scheduling and persistence around long-running work
 - app-specific logging policy beyond execution metadata

@@ -12,32 +12,37 @@ The library exposes three execution modes:
 
 The package does not call Anthropic APIs directly. It shells out to the local Claude Code CLI, captures stdout and stderr, then normalizes the response into typed results and library-specific exceptions.
 
+All three execution modes can optionally run through a `RateLimitRetryPolicy`. The policy is a synchronous wrapper around one-attempt execution: it catches `ClaudeRateLimitError`, sleeps only when parsed reset metadata fits the caller's wait budget, logs the wait, and retries the same operation.
+
 ## Execution Flow
 
 ### Text mode
 
-1. `ClaudeCodeClient.run_text()` resolves `RunOptions`
-2. `client._prepare()` builds argv and the optional stdin payload
-3. `transport.execute_command()` runs the subprocess
-4. `client` returns `TextRunResult` or raises a normalized exception
+1. `ClaudeCodeClient.run_text()` applies an optional `RateLimitRetryPolicy`
+2. single-attempt text execution resolves `RunOptions`
+3. `client._prepare()` builds argv and the optional stdin payload
+4. `transport.execute_command()` runs the subprocess
+5. `client` returns `TextRunResult` or raises a normalized exception
 
 ### JSON mode
 
-1. `ClaudeCodeClient.run_json()` forces `--output-format json`
-2. `transport.execute_command()` runs Claude
-3. `parser.try_parse_json_payload()` parses the JSON envelope
-4. `types.ClaudeJsonPayload` exposes the normalized envelope fields
-5. `client` returns `JsonRunResult` or raises a normalized exception
+1. `ClaudeCodeClient.run_json()` applies an optional `RateLimitRetryPolicy`
+2. single-attempt JSON execution forces `--output-format json`
+3. `transport.execute_command()` runs Claude
+4. `parser.try_parse_json_payload()` parses the JSON envelope
+5. `types.ClaudeJsonPayload` exposes the normalized envelope fields
+6. `client` returns `JsonRunResult` or raises a normalized exception
 
 ### Structured mode
 
 1. The caller builds `StructuredSchema.from_dict(...)`
 2. `schema.py` validates the JSON Schema locally with `jsonschema`
-3. `ClaudeCodeClient.run_structured()` adds `--json-schema <schema.cli_json>`
-4. Claude runs in JSON mode and returns the normal JSON envelope
-5. `client` requires `payload.structured_output` to be present
-6. `schema.py` validates the returned `structured_output` against the same schema
-7. `client` returns `StructuredRunResult`
+3. `ClaudeCodeClient.run_structured()` applies an optional `RateLimitRetryPolicy`
+4. single-attempt structured execution adds `--json-schema <schema.cli_json>`
+5. Claude runs in JSON mode and returns the normal JSON envelope
+6. `client` requires `payload.structured_output` to be present
+7. `schema.py` validates the returned `structured_output` against the same schema
+8. `client` returns `StructuredRunResult`
 
 Structured mode preserves the full Claude envelope through `result.payload`, including session ID, cost, usage, duration, and raw output.
 
@@ -46,7 +51,7 @@ Structured mode preserves the full Claude envelope through `result.payload`, inc
 - `src/stan_ai_client/client.py`: public client, command preparation, execution, logging, and error normalization
 - `src/stan_ai_client/transport.py`: subprocess transport wrapper
 - `src/stan_ai_client/parser.py`: JSON payload parsing helpers
-- `src/stan_ai_client/types.py`: request, payload, and result dataclasses
+- `src/stan_ai_client/types.py`: request, retry-policy, payload, and result dataclasses
 - `src/stan_ai_client/schema.py`: `StructuredSchema` and JSON Schema validation
 - `src/stan_ai_client/exceptions.py`: library exception hierarchy, including structured limit errors with parsed reset timestamps
 - `src/stan_ai_client/rate_limits.py`: rate-limit parsing helpers
@@ -57,7 +62,7 @@ The client uses stdlib `logging`.
 
 - `INFO`: run start and finish metadata
 - `DEBUG`: redacted argv, payload metadata, and structured-output validation events
-- `WARNING` / `ERROR`: protocol failures, process failures, rate limits, missing executable, and timeouts
+- `WARNING` / `ERROR`: protocol failures, process failures, rate limits, rate-limit retry waits, wait-budget refusals, missing executable, and timeouts
 
 Prompt text is only logged when `log_prompts=True`.
 

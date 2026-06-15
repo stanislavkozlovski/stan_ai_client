@@ -40,6 +40,22 @@ class RunOptions:
 
 
 @dataclass(frozen=True)
+class RateLimitRetryPolicy:
+    """Controls opt-in retry behavior for Claude rate-limit responses.
+
+    Claude rate limits usually reset on a concrete schedule, so the policy is
+    budget-based: callers decide how long an operation may wait.
+    """
+
+    max_wait_seconds: float | None
+    label: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.max_wait_seconds is not None and self.max_wait_seconds < 0:
+            raise ValueError("max_wait_seconds must be None or >= 0")
+
+
+@dataclass(frozen=True)
 class CommandMetadata:
     argv: tuple[str, ...]
     cwd: str | None
