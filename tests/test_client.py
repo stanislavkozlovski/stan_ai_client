@@ -9,6 +9,7 @@ import pytest
 
 from stan_ai_client import (
     ClaudeCodeClient,
+    CommandMetadata,
     ClaudeExecutableNotFoundError,
     ClaudeLimitError,
     ClaudeProcessError,
@@ -16,6 +17,7 @@ from stan_ai_client import (
     ClaudeRateLimitError,
     ClaudeStructuredOutputMissingError,
     ClaudeStructuredOutputValidationError,
+    RateLimitInfo,
     RateLimitRetryPolicy,
     RunOptions,
     StructuredRunResult,
@@ -171,7 +173,7 @@ def test_run_json_raises_rate_limit_error(monkeypatch: pytest.MonkeyPatch) -> No
     with pytest.raises(ClaudeRateLimitError) as excinfo:
         client.run_json("hello")
 
-    assert excinfo.value.rate_limit.retry_after_seconds == 3600
+    assert excinfo.value.rate_limit.retry_after_seconds == 3660
 
 
 def test_run_json_raises_limit_error_for_hit_your_limit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -224,14 +226,14 @@ def test_rate_limit_policy_retries_json_after_parsed_wait(
 
     result = client.run_json(
         "hello",
-        rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=5, label="json test"),
+        rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=65, label="json test"),
     )
 
     assert result.payload.result == "ok"
     assert len(recorder.calls) == 2
-    assert sleeps == [3.0]
+    assert sleeps == [63.0]
     assert "Claude rate limited; retrying after reset" in caplog.text
-    assert "wait_seconds=3.0" in caplog.text
+    assert "wait_seconds=63.0" in caplog.text
     assert "label=json test" in caplog.text
 
 
@@ -261,7 +263,7 @@ def test_rate_limit_policy_refuses_json_wait_over_budget(
             rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=5, label="json test"),
         )
 
-    assert excinfo.value.retry_after_seconds == 10
+    assert excinfo.value.retry_after_seconds == 70
     assert len(recorder.calls) == 1
     assert sleeps == []
     assert "Claude rate limit exceeds wait budget" in caplog.text
@@ -300,6 +302,43 @@ def test_rate_limit_policy_refuses_json_without_retry_metadata(
     assert "no retry metadata was parsed" in caplog.text
 
 
+def test_rate_limit_policy_refuses_non_positive_retry_wait(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("stan_ai_client.tests.rate_limit_zero_wait")
+    caplog.set_level(logging.WARNING, logger=logger.name)
+    client = ClaudeCodeClient(logger=logger)
+    sleeps: list[float] = []
+    monkeypatch.setattr("stan_ai_client.client.time.sleep", sleeps.append)
+    error = ClaudeRateLimitError(
+        "rate limited",
+        command=CommandMetadata(argv=("claude",), cwd=None, elapsed_ms=0.0),
+        returncode=1,
+        stdout="",
+        stderr="",
+        payload=None,
+        rate_limit=RateLimitInfo(
+            message="rate limited",
+            retry_after_seconds=0,
+            reset_at=None,
+        ),
+    )
+
+    def operation() -> None:
+        raise error
+
+    with pytest.raises(ClaudeRateLimitError) as excinfo:
+        client._run_with_rate_limit_policy(
+            operation,
+            rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=0),
+        )
+
+    assert excinfo.value is error
+    assert sleeps == []
+    assert "non-positive retry wait" in caplog.text
+
+
 def test_rate_limit_policy_uses_cumulative_wait_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -328,11 +367,11 @@ def test_rate_limit_policy_uses_cumulative_wait_budget(
     with pytest.raises(ClaudeRateLimitError):
         client.run_json(
             "hello",
-            rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=5),
+            rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=100),
         )
 
     assert len(recorder.calls) == 2
-    assert sleeps == [4.0]
+    assert sleeps == [64.0]
 
 
 def test_rate_limit_policy_retries_text_mode(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -360,12 +399,12 @@ def test_rate_limit_policy_retries_text_mode(monkeypatch: pytest.MonkeyPatch) ->
 
     result = client.run_text(
         "hello",
-        rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=2),
+        rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=62),
     )
 
     assert result.text == "done"
     assert len(recorder.calls) == 2
-    assert sleeps == [2.0]
+    assert sleeps == [62.0]
 
 
 def test_rate_limit_policy_retries_structured_mode(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -402,12 +441,12 @@ def test_rate_limit_policy_retries_structured_mode(monkeypatch: pytest.MonkeyPat
     result = client.run_structured(
         "hello",
         schema=schema,
-        rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=1),
+        rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=61),
     )
 
     assert result.structured_output == {"summary": "brief"}
     assert len(recorder.calls) == 2
-    assert sleeps == [1.0]
+    assert sleeps == [61.0]
 
 
 def test_rate_limit_policy_validates_max_wait_seconds() -> None:

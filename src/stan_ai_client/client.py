@@ -287,6 +287,18 @@ class ClaudeCodeClient:
                     raise
 
                 wait_seconds_float = float(wait_seconds)
+                if wait_seconds_float <= 0:
+                    self.logger.warning(
+                        "Claude rate limited with non-positive retry wait attempt=%d wait_seconds=%.1f total_wait_seconds=%.1f max_wait_seconds=%s reset_at=%s label=%s",
+                        attempt,
+                        wait_seconds_float,
+                        total_wait_seconds,
+                        rate_limit_policy.max_wait_seconds,
+                        exc.reset_at,
+                        rate_limit_policy.label,
+                    )
+                    raise
+
                 if rate_limit_policy.max_wait_seconds is not None:
                     remaining_wait_seconds = (
                         rate_limit_policy.max_wait_seconds - total_wait_seconds

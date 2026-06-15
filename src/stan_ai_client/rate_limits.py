@@ -16,6 +16,10 @@ RATE_LIMIT_MARKERS = (
     "usage limit",
     "limit reached",
 )
+RATE_LIMIT_RETRY_BUFFER_SECONDS = 60
+# Claude reset hints are rounded and can race with server-side clock skew or
+# propagation delays. Add one minute to every parsed retry/reset value so
+# automated retries do not resume exactly on the advertised boundary.
 
 
 @dataclass(frozen=True)
@@ -50,10 +54,12 @@ def parse_rate_limit_info(
 
     retry_after_seconds: int | None = None
     if reset_at is not None:
+        reset_at += timedelta(seconds=RATE_LIMIT_RETRY_BUFFER_SECONDS)
         retry_after_seconds = max(0, int((reset_at - reference).total_seconds()))
     else:
         retry_after_seconds = _parse_retry_after_seconds(lower)
         if retry_after_seconds is not None:
+            retry_after_seconds += RATE_LIMIT_RETRY_BUFFER_SECONDS
             reset_at = reference + timedelta(seconds=retry_after_seconds)
 
     return RateLimitInfo(
