@@ -13,6 +13,7 @@ The library is intentionally small and pragmatic:
 - structured exceptions
 - local JSON Schema validation
 - rate-limit parsing helpers
+- opt-in rate-limit retry policy
 - stdlib logging
 
 ## Why Use It
@@ -174,23 +175,33 @@ By default, logging includes execution metadata, not full prompt text. Set `log_
 
 ### Error handling
 
-If you automate Claude Code, treat `ClaudeLimitError` as a normal control-flow case: wait until `exc.reset_at` or sleep `exc.retry_after_seconds`, then retry.
+If you automate Claude Code in batch jobs, pass a `RateLimitRetryPolicy` to let the client wait through parseable Claude rate limits up to your budget.
 
 ```python
-import time
-
-from stan_ai_client import ClaudeCodeClient, ClaudeLimitError
+from stan_ai_client import ClaudeCodeClient, RateLimitRetryPolicy
 
 client = ClaudeCodeClient()
 
-for attempt in range(3):
-    try:
-        result = client.run_json("Summarize this repository.")
-        break
-    except ClaudeLimitError as exc:
-        if attempt == 2 or exc.retry_after_seconds is None:
-            raise
-        time.sleep(exc.retry_after_seconds)
+result = client.run_json(
+    "Summarize this repository.",
+    rate_limit_policy=RateLimitRetryPolicy(
+        max_wait_seconds=5 * 60 * 60,
+        label="repo summary",
+    ),
+)
+```
+
+For user-facing workflows, omit `rate_limit_policy` and catch `ClaudeRateLimitError` so you can return the reset time to the user.
+
+```python
+from stan_ai_client import ClaudeCodeClient, ClaudeRateLimitError
+
+client = ClaudeCodeClient()
+
+try:
+    result = client.run_json("Summarize this repository.")
+except ClaudeRateLimitError as exc:
+    print(exc.reset_at or exc.retry_after_seconds)
 ```
 
 ## Public Surface
@@ -218,6 +229,7 @@ from stan_ai_client import (
     ClaudeSchemaValidationError,
     ClaudeStructuredOutputMissingError,
     ClaudeStructuredOutputValidationError,
+    RateLimitRetryPolicy,
     RateLimitInfo,
     parse_rate_limit_info,
 )
@@ -237,7 +249,7 @@ from stan_ai_client import (
 - opt-in stdlib logging with safe default prompt handling
 - typed JSON payload parsing with unknown fields preserved in `extras`
 - local input and output validation for structured mode
-- rate-limit detection and reset-time parsing
+- rate-limit detection, reset-time parsing, and opt-in retry policy
 
 ## Examples
 
@@ -245,6 +257,7 @@ from stan_ai_client import (
 - [examples/summarize_article.py](./examples/summarize_article.py)
 - [examples/tag_article.py](./examples/tag_article.py)
 - [examples/logging_demo.py](./examples/logging_demo.py)
+- [examples/rate_limit_retry.py](./examples/rate_limit_retry.py)
 
 ## Documentation
 
@@ -276,7 +289,7 @@ See [DOCS.md](./DOCS.md) for:
 
 - no streaming support
 - no async API
-- no built-in retry loop
+- no background scheduler or persistent job queue
 - no standalone CLI wrapper command
 - no first-class typed wrapper yet for every Claude Code flag
 - structured mode accepts dict-backed JSON Schema objects only

@@ -16,6 +16,10 @@ RATE_LIMIT_MARKERS = (
     "usage limit",
     "limit reached",
 )
+RATE_LIMIT_RETRY_BUFFER_SECONDS = 60
+# Claude reset hints are rounded and can race with server-side clock skew or
+# propagation delays. Add one minute to every parsed retry/reset value so
+# automated retries do not resume exactly on the advertised boundary.
 
 
 @dataclass(frozen=True)
@@ -50,10 +54,12 @@ def parse_rate_limit_info(
 
     retry_after_seconds: int | None = None
     if reset_at is not None:
+        reset_at += timedelta(seconds=RATE_LIMIT_RETRY_BUFFER_SECONDS)
         retry_after_seconds = max(0, int((reset_at - reference).total_seconds()))
     else:
         retry_after_seconds = _parse_retry_after_seconds(lower)
         if retry_after_seconds is not None:
+            retry_after_seconds += RATE_LIMIT_RETRY_BUFFER_SECONDS
             reset_at = reference + timedelta(seconds=retry_after_seconds)
 
     return RateLimitInfo(
@@ -116,12 +122,12 @@ def _parse_relative_reset(text: str, reference: datetime) -> datetime | None:
     if match is not None:
         hours = int(match.group(1))
         minutes = int(match.group(2)) if match.group(2) is not None else 0
-        return reference + timedelta(hours=hours, minutes=minutes, seconds=60)
+        return reference + timedelta(hours=hours, minutes=minutes)
 
     match = re.search(r"resets?\s+in[:\s]+(\d+)\s*(?:minutes?|m|min)", text)
     if match is not None:
         minutes = int(match.group(1))
-        return reference + timedelta(minutes=minutes, seconds=60)
+        return reference + timedelta(minutes=minutes)
 
     return None
 
@@ -130,7 +136,7 @@ def _parse_retry_after_seconds(text: str) -> int | None:
     match = re.search(r"retry[- ]after[:\s]+(\d+)", text)
     if match is None:
         return None
-    return int(match.group(1)) + 30
+    return int(match.group(1))
 
 
 def _time_str_to_datetime(
