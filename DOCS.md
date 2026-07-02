@@ -2,11 +2,17 @@
 
 ## Overview
 
-`stan_ai_client` is a thin Python wrapper around the local `claude` executable.
+`stan_ai_client` is a thin Python wrapper around local AI coding CLI
+executables.
 
-It is designed for scriptable Claude Code usage where:
+It supports:
 
-- Claude Code is already installed locally
+- `ClaudeCodeClient` over the local `claude` executable
+- `CodexClient` over the local `codex exec` command
+
+It is designed for scriptable local CLI usage where:
+
+- the selected CLI is already installed and authenticated
 - the caller wants a Python API instead of manual subprocess handling
 - text mode, JSON mode, or structured mode is enough
 - structured error handling matters
@@ -14,7 +20,8 @@ It is designed for scriptable Claude Code usage where:
 
 It does not:
 
-- call Anthropic APIs directly
+- call Anthropic or OpenAI APIs directly
+- manage CLI authentication files
 - implement streaming
 - implement async execution
 - implement a long-running job scheduler
@@ -33,10 +40,11 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-Verify Claude Code is available:
+Verify the CLI you want is available:
 
 ```bash
 claude --version
+codex --version
 ```
 
 ## Versioning And Releases
@@ -56,36 +64,6 @@ from stan_ai_client import __version__
 print(__version__)
 ```
 
-## Maintainer Release Flow
-
-The repository uses one GitHub Actions workflow at `.github/workflows/ci.yml`.
-
-Behavior:
-
-- pull requests run lint, mypy, and tests
-- pushes to `main` run the same checks
-- after checks pass on `main`, GitHub Actions:
-  - bumps `pyproject.toml`
-  - creates a release commit
-  - tags the release
-  - builds `sdist` and `wheel`
-  - publishes to PyPI via Trusted Publishing
-
-One manual prerequisite exists outside the repo:
-
-- PyPI must be configured to trust this GitHub repository and the `.github/workflows/ci.yml` workflow before the first publish
-- if you configure a GitHub environment claim on PyPI, use `pypi`
-
-## First Run
-
-```python
-from stan_ai_client import ClaudeCodeClient
-
-client = ClaudeCodeClient()
-result = client.run_text("Reply with the single word: ok")
-print(result.text)
-```
-
 ## Main API
 
 ### `ClaudeCodeClient`
@@ -103,42 +81,50 @@ class ClaudeCodeClient:
         logger: logging.Logger | None = None,
         log_prompts: bool = False,
     ) -> None: ...
-
-    def run_text(
-        self,
-        prompt: str,
-        *,
-        options: RunOptions | None = None,
-        rate_limit_policy: RateLimitRetryPolicy | None = None,
-    ) -> TextRunResult: ...
-    def run_json(
-        self,
-        prompt: str,
-        *,
-        options: RunOptions | None = None,
-        rate_limit_policy: RateLimitRetryPolicy | None = None,
-    ) -> JsonRunResult: ...
-    def run_structured(
-        self,
-        prompt: str,
-        *,
-        schema: StructuredSchema[TStructured],
-        options: RunOptions | None = None,
-        rate_limit_policy: RateLimitRetryPolicy | None = None,
-    ) -> StructuredRunResult[TStructured]: ...
 ```
 
-### Constructor behavior
+Methods:
 
-- `executable` selects the local binary to run. Default is `claude`.
-- `default_model`, `default_effort`, and `default_timeout_seconds` provide process defaults.
-- `default_options` lets you set a reusable baseline that per-call options can override.
-- `logger` lets you provide a stdlib logger for client execution logs.
-- `log_prompts` controls whether full prompt text is logged at debug level.
+```python
+def run_text(..., options: RunOptions | None = None) -> TextRunResult: ...
+def run_json(..., options: RunOptions | None = None) -> JsonRunResult: ...
+def run_structured(..., schema: StructuredSchema[T], options: RunOptions | None = None) -> StructuredRunResult[T]: ...
+```
 
-### `StructuredSchema`
+### `CodexClient`
 
-`StructuredSchema` is the guided entry point for structured mode.
+```python
+class CodexClient:
+    def __init__(
+        self,
+        *,
+        executable: str = "codex",
+        default_model: str = "gpt-5.5",
+        default_reasoning_effort: Literal["low", "medium", "high", "xhigh"] = "medium",
+        default_permission_mode: Literal["default", "bypassPermissions"] = "bypassPermissions",
+        default_timeout_seconds: float = 120.0,
+        default_options: CodexRunOptions | None = None,
+        logger: logging.Logger | None = None,
+        log_prompts: bool = False,
+    ) -> None: ...
+```
+
+Methods:
+
+```python
+def run_text(..., options: CodexRunOptions | None = None) -> TextRunResult: ...
+def run_json(..., options: CodexRunOptions | None = None) -> CodexJsonRunResult: ...
+def run_structured(..., schema: StructuredSchema[T], options: CodexRunOptions | None = None) -> CodexStructuredRunResult[T]: ...
+```
+
+`CodexClient` defaults to `bypassPermissions`, which adds
+`--dangerously-bypass-approvals-and-sandbox` to `codex exec`. Use
+`CodexRunOptions(permission_mode="default")` or
+`CodexClient(default_permission_mode="default")` to omit that flag.
+
+## StructuredSchema
+
+`StructuredSchema` is shared by both clients.
 
 ```python
 from stan_ai_client import StructuredSchema
@@ -146,9 +132,7 @@ from stan_ai_client import StructuredSchema
 schema = StructuredSchema.from_dict(
     {
         "type": "object",
-        "properties": {
-            "summary": {"type": "string"},
-        },
+        "properties": {"summary": {"type": "string"}},
         "required": ["summary"],
         "additionalProperties": False,
     }
@@ -158,85 +142,19 @@ schema = StructuredSchema.from_dict(
 Behavior:
 
 - accepts dict-backed JSON Schema objects only
-- validates the schema locally before any Claude subprocess starts
-- stores the compact CLI JSON string once
-- validates returned `structured_output` against the same schema
+- validates the schema locally before any subprocess starts
+- stores the compact CLI JSON string as `cli_json`
+- validates returned structured output against the same schema
 
-## Logging
+Claude structured mode passes `cli_json` inline with `--json-schema`. Codex
+structured mode writes `cli_json` to a temporary file and passes the path with
+`--output-schema`.
 
-Logging uses Python's stdlib `logging`.
+## Options
 
-If you do not configure logging in your application, the library still works normally; you just will not usually see info/debug output.
+### `RunOptions`
 
-### Default logger behavior
-
-- if you pass `logger=...`, that logger is used
-- otherwise the client uses `logging.getLogger("stan_ai_client")`
-- prompt text is not logged unless `log_prompts=True`
-
-### What gets logged
-
-At `INFO`:
-
-- run start
-- output mode
-- model
-- effort
-- cwd
-- input mode
-- timeout
-- prompt length
-- whether the run is resuming, continuing, or forking
-- run finish
-- elapsed time
-- stdout/stderr sizes
-
-At `DEBUG`:
-
-- redacted argv
-- parsed JSON payload metadata when available
-- structured mode enabled
-- whether `structured_output` was present
-- whether structured-output validation succeeded or failed
-- full prompt text only if `log_prompts=True`
-
-At `WARNING` or `ERROR`:
-
-- missing executable
-- timeout
-- protocol errors
-- process errors
-- rate-limit details
-- rate-limit retry waits and wait-budget refusals
-
-### Logging example
-
-```python
-import logging
-
-from stan_ai_client import ClaudeCodeClient
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("my_app.claude")
-
-client = ClaudeCodeClient(
-    logger=logger,
-    log_prompts=False,
-)
-
-client.run_text("Reply with the single word: ok")
-```
-
-### Logging safety
-
-- prompts are redacted by default
-- argv is logged in redacted form
-- `--system-prompt`, `--append-system-prompt`, `--settings`, and resumed session IDs are redacted in argv logs
-- use `log_prompts=True` only when you explicitly want prompt text in logs
-
-## `RunOptions`
-
-`RunOptions` controls one invocation.
+`RunOptions` controls one Claude invocation.
 
 ```python
 @dataclass(frozen=True)
@@ -261,131 +179,66 @@ class RunOptions:
     env: Mapping[str, str] | None = None
 ```
 
-### Field reference
+Important mappings:
 
-`cwd`
-- Working directory for the Claude process.
-- Use this when Claude tools should read files from a specific directory.
+- `cwd`: subprocess working directory
+- `model`: `--model`
+- `effort`: `--effort`
+- `input_mode="stdin"`: prompt over stdin while still using `claude -p`
+- `input_mode="argv"`: prompt appended directly to argv
+- `session_id`: `--resume <session_id>`
+- `continue_last_session`: `--continue`
+- `fork_session`: `--fork-session`
+- `extra_args`: escape hatch for unsupported Claude flags
 
-`model`
-- Overrides the default model for this call.
+### `CodexRunOptions`
 
-`effort`
-- Sets Claude Code effort level.
-- Supported values: `low`, `medium`, `high`, `max`.
-
-`timeout_seconds`
-- Subprocess timeout for the whole invocation.
-
-`input_mode`
-- `stdin` sends the prompt through stdin and still uses `claude -p`.
-- `argv` appends the prompt directly to the command argv.
-- Default is `stdin`.
-
-`allowed_tools`
-- Maps to `--allowed-tools`.
-- Pass `()` to explicitly send an empty allowlist string.
-
-`disallowed_tools`
-- Maps to `--disallowed-tools`.
-
-`tools`
-- Maps to `--tools`.
-
-`add_dirs`
-- Repeats `--add-dir` for each provided path.
-
-`permission_mode`
-- Maps to `--permission-mode`.
-- Current supported literal values are:
-  - `acceptEdits`
-  - `bypassPermissions`
-  - `default`
-  - `dontAsk`
-  - `plan`
-  - `auto`
-
-`system_prompt`
-- Maps to `--system-prompt`.
-
-`append_system_prompt`
-- Maps to `--append-system-prompt`.
-
-`settings`
-- Maps to `--settings`.
-
-`session_id`
-- Maps to `--resume <session_id>`.
-
-`continue_last_session`
-- Maps to `--continue`.
-- Cannot be used together with `session_id`.
-
-`fork_session`
-- Maps to `--fork-session`.
-
-`extra_args`
-- Escape hatch for Claude CLI flags not yet modeled directly by `RunOptions`.
-- Example:
-
-```python
-RunOptions(extra_args=("--debug", "--max-budget-usd", "1.50"))
-```
-
-`env`
-- Additional environment variables merged on top of `os.environ`.
-
-## `RateLimitRetryPolicy`
-
-`RateLimitRetryPolicy` controls opt-in retry behavior for Claude rate-limit responses.
+`CodexRunOptions` controls one Codex invocation.
 
 ```python
 @dataclass(frozen=True)
-class RateLimitRetryPolicy:
-    max_wait_seconds: float | None
-    label: str | None = None
+class CodexRunOptions:
+    cwd: str | Path | None = None
+    model: str | None = None
+    reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = None
+    timeout_seconds: float | None = None
+    input_mode: Literal["stdin", "argv"] = "stdin"
+    permission_mode: Literal["default", "bypassPermissions"] | None = None
+    session_id: str | None = None
+    continue_last_session: bool | None = None
+    skip_git_repo_check: bool | None = None
+    ignore_user_config: bool | None = None
+    ignore_rules: bool | None = None
+    add_dirs: tuple[str | Path, ...] | None = None
+    profile: str | None = None
+    config_overrides: tuple[str, ...] | None = None
+    extra_args: tuple[str, ...] | None = None
+    env: Mapping[str, str] | None = None
 ```
 
-Fields:
+Important mappings:
 
-`max_wait_seconds`
-- Maximum accumulated sleep time allowed for one client call.
-- `None` means wait for any parseable Claude reset.
-- `0` means only zero-second waits can retry.
+- `cwd`: subprocess working directory and `--cd <dir>`
+- `model`: `--model`
+- `reasoning_effort`: `-c model_reasoning_effort="<value>"`
+- `permission_mode="bypassPermissions"`: `--dangerously-bypass-approvals-and-sandbox`
+- `permission_mode="default"`: omit the bypass flag
+- `input_mode="stdin"`: prompt sent through stdin with `codex exec -`
+- `input_mode="argv"`: prompt appended directly to argv
+- `session_id`: `codex exec resume <session_id>`
+- `continue_last_session`: `codex exec resume --last`
+- `skip_git_repo_check`: `--skip-git-repo-check`
+- `ignore_user_config`: `--ignore-user-config`
+- `ignore_rules`: `--ignore-rules`
+- `profile`: `--profile`
+- `config_overrides`: repeated `-c <override>`
+- `extra_args`: escape hatch for unsupported Codex flags
 
-`label`
-- Optional human-readable context included in retry logs.
-- Use operation names such as `chapters pass1 chunk=12`.
-- Do not put prompt text or secrets in the label.
-
-Behavior:
-
-- Without a policy, rate limits raise `ClaudeRateLimitError` immediately.
-- With a policy, the client sleeps and retries only when `retry_after_seconds` was parsed.
-- If the next wait exceeds the remaining `max_wait_seconds` budget, the client re-raises the same `ClaudeRateLimitError`.
-- If Claude does not provide parseable retry/reset metadata, the client re-raises the same `ClaudeRateLimitError`.
-- Each retry sleep is logged at `WARNING`.
-
-Example:
-
-```python
-from stan_ai_client import ClaudeCodeClient, RateLimitRetryPolicy
-
-client = ClaudeCodeClient()
-result = client.run_json(
-    "Summarize this repository.",
-    rate_limit_policy=RateLimitRetryPolicy(
-        max_wait_seconds=5 * 60 * 60,
-        label="repo summary",
-    ),
-)
-```
+`session_id` and `continue_last_session` are mutually exclusive.
 
 ## Execution Modes
 
-### Text mode
-
-Use `run_text()` when you want Claude’s raw textual output.
+### Claude Text
 
 ```python
 from stan_ai_client import ClaudeCodeClient
@@ -395,14 +248,9 @@ result = client.run_text("Output YAML only.")
 print(result.text)
 ```
 
-Text mode still performs error normalization:
+Text mode requests `--output-format text`.
 
-- non-zero exits raise exceptions
-- if stdout happens to be JSON and reports `is_error=true`, that is treated as failure too
-
-### JSON mode
-
-Use `run_json()` when you want machine-readable Claude output.
+### Claude JSON
 
 ```python
 from stan_ai_client import ClaudeCodeClient
@@ -410,67 +258,76 @@ from stan_ai_client import ClaudeCodeClient
 client = ClaudeCodeClient()
 result = client.run_json("Reply with a short answer.")
 print(result.payload.result)
-print(result.payload.total_cost_usd)
+print(result.payload.session_id)
 ```
 
-JSON mode requires valid JSON output:
+JSON mode requests `--output-format json` and parses a single Claude JSON
+envelope into `ClaudeJsonPayload`.
 
-- empty output raises `ClaudeProtocolError`
-- non-JSON output raises `ClaudeProtocolError`
-- JSON payloads with `is_error=true` raise `ClaudeProcessError` or `ClaudeRateLimitError`
-
-### Structured mode
-
-Use `run_structured()` when you want Claude’s JSON envelope plus a validated `structured_output`.
+### Claude Structured
 
 ```python
 from stan_ai_client import ClaudeCodeClient, StructuredSchema
 
 client = ClaudeCodeClient()
+schema = StructuredSchema.from_dict({"type": "object"})
+result = client.run_structured("Return an object.", schema=schema)
+print(result.structured_output)
+```
+
+Structured mode requests JSON mode, passes `--json-schema <compact-json>`,
+requires `payload.structured_output`, and validates it locally.
+
+### Codex Text
+
+```python
+from stan_ai_client import CodexClient
+
+client = CodexClient()
+result = client.run_text("Output YAML only.")
+print(result.text)
+```
+
+Text mode runs `codex exec`.
+
+### Codex JSONL
+
+```python
+from stan_ai_client import CodexClient
+
+client = CodexClient()
+result = client.run_json("Summarize this repository.")
+print(result.payload.result)
+print(result.payload.thread_id)
+print(result.payload.usage)
+```
+
+JSON mode runs `codex exec --json` and parses stdout as JSONL. Raw events are
+preserved on `CodexJsonPayload.events`.
+
+### Codex Structured
+
+```python
+from stan_ai_client import CodexClient, StructuredSchema
+
+client = CodexClient()
 schema = StructuredSchema.from_dict(
     {
         "type": "object",
-        "properties": {
-            "summary": {"type": "string"},
-            "tags": {"type": "array", "items": {"type": "string"}},
-        },
-        "required": ["summary", "tags"],
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"],
         "additionalProperties": False,
     }
 )
-
-result = client.run_structured(
-    "Summarize this article and return tags.",
-    schema=schema,
-)
-
-print(result.structured_output)
-print(result.payload.session_id)
-print(result.payload.total_cost_usd)
+result = client.run_structured("Summarize this repository.", schema=schema)
+print(result.structured_output["summary"])
 ```
 
-Structured mode behavior:
-
-- validates the input schema locally before Claude runs
-- requests Claude JSON mode and passes `--json-schema`
-- requires `structured_output` to be present in the JSON envelope
-- does not fall back to `payload.result`
-- validates the returned `structured_output` locally against the same schema
-- preserves the full Claude envelope through `result.payload`
+Structured mode writes the schema to a temporary file, runs
+`codex exec --output-schema <file>`, parses stdout as JSON, validates the result,
+and deletes the temporary schema file.
 
 ## Result Types
-
-### `CommandMetadata`
-
-```python
-@dataclass(frozen=True)
-class CommandMetadata:
-    argv: tuple[str, ...]
-    cwd: str | None
-    elapsed_ms: float
-```
-
-Available on both text and JSON results.
 
 ### `TextRunResult`
 
@@ -484,12 +341,7 @@ class TextRunResult:
     text: str
 ```
 
-Notes:
-
-- `text` is just `stdout.strip()`
-- raw `stdout` and `stderr` are preserved for debugging
-
-### `JsonRunResult`
+### Claude results
 
 ```python
 @dataclass(frozen=True)
@@ -499,11 +351,7 @@ class JsonRunResult:
     stderr: str
     returncode: int
     payload: ClaudeJsonPayload
-```
 
-### `StructuredRunResult[TStructured]`
-
-```python
 @dataclass(frozen=True)
 class StructuredRunResult(Generic[TStructured]):
     command: CommandMetadata
@@ -514,287 +362,169 @@ class StructuredRunResult(Generic[TStructured]):
     structured_output: TStructured
 ```
 
-### `ClaudeJsonPayload`
+### Codex results
 
-Currently parsed fields:
+```python
+@dataclass(frozen=True)
+class CodexJsonRunResult:
+    command: CommandMetadata
+    stdout: str
+    stderr: str
+    returncode: int
+    payload: CodexJsonPayload
 
-- `type`
-- `subtype`
-- `is_error`
-- `duration_ms`
-- `duration_api_ms`
-- `num_turns`
+@dataclass(frozen=True)
+class CodexStructuredRunResult(Generic[TStructured]):
+    command: CommandMetadata
+    stdout: str
+    stderr: str
+    returncode: int
+    payload: CodexJsonPayload
+    structured_output: TStructured
+```
+
+### Payloads
+
+`ClaudeJsonPayload` exposes Claude envelope fields such as `result`,
+`session_id`, `total_cost_usd`, `usage`, `model_usage`, `structured_output`, and
+`extras`.
+
+`CodexJsonPayload` exposes:
+
+- `thread_id`
 - `result`
-- `stop_reason`
-- `session_id`
-- `total_cost_usd`
-- `structured_output`
 - `usage`
-- `model_usage`
-- `permission_denials`
-- `uuid`
-- `extras`
-
-`extras` preserves unknown keys for forward compatibility.
+- `events`
+- `error`
+- `structured_output`
 
 ## Exception Model
 
-All library-specific exceptions inherit from `ClaudeCodeError`.
+Provider-specific exceptions remain available:
 
-### `ClaudeExecutableNotFoundError`
+- `ClaudeCodeError`
+- `ClaudeExecutableNotFoundError`
+- `ClaudeTimeoutError`
+- `ClaudeProcessError`
+- `ClaudeProtocolError`
+- `ClaudeRateLimitError`
+- `ClaudeStructuredOutputMissingError`
+- `ClaudeStructuredOutputValidationError`
+- `CodexCodeError`
+- `CodexExecutableNotFoundError`
+- `CodexTimeoutError`
+- `CodexProcessError`
+- `CodexProtocolError`
+- `CodexRateLimitError`
+- `CodexStructuredOutputMissingError`
+- `CodexStructuredOutputValidationError`
 
-Raised when the configured executable does not exist.
+Provider-neutral base classes are also exported:
 
-### `ClaudeTimeoutError`
+- `AIClientError`
+- `ExecutableNotFoundError`
+- `TimeoutError`
+- `ProcessError`
+- `ProtocolError`
+- `SchemaValidationError`
+- `StructuredSchemaValidationError`
+- `StructuredOutputMissingError`
+- `StructuredOutputValidationError`
+- `LimitError`
+- `RateLimitError`
 
-Raised when the subprocess times out.
-
-Carries:
-
-- `command`
-- `timeout_seconds`
-
-### `ClaudeProcessError`
-
-Raised when:
-
-- the process exits non-zero
-- or the JSON payload reports `is_error=true`
-
-Carries:
-
-- `command`
-- `returncode`
-- `stdout`
-- `stderr`
-- `payload`
-
-### `ClaudeProtocolError`
-
-Raised when JSON mode receives output that cannot be treated as valid JSON protocol output.
-
-Carries:
-
-- `command`
-- `stdout`
-- `stderr`
-
-### `ClaudeSchemaValidationError`
-
-Raised when `StructuredSchema.from_dict(...)` receives a non-dict input or an invalid JSON Schema.
-
-### `ClaudeStructuredOutputMissingError`
-
-Raised when structured mode succeeds at the process level but Claude does not return `structured_output`.
-
-Carries:
-
-- `command`
-- `stdout`
-- `stderr`
-- `payload`
-
-### `ClaudeStructuredOutputValidationError`
-
-Raised when Claude returns `structured_output` but it does not validate against the provided schema.
-
-Carries:
-
-- `command`
-- `stdout`
-- `stderr`
-- `payload`
-- `structured_output`
-
-### `ClaudeLimitError`
-
-Specialized `ClaudeProcessError` for Claude usage or rate limits.
-
-Carries everything from `ClaudeProcessError` plus:
-
-- `limit`
-- `rate_limit`
-- `retry_after_seconds`
-- `reset_at`
-
-### `ClaudeRateLimitError`
-
-Backward-compatible subclass of `ClaudeLimitError`.
-
-Carries everything from `ClaudeProcessError` plus:
-
-- `rate_limit`
+Catch provider-specific exceptions when you care which CLI failed. Catch
+provider-neutral exceptions when the caller should handle Claude and Codex the
+same way.
 
 ## Rate Limits
 
-### `parse_rate_limit_info()`
+`RateLimitRetryPolicy` controls opt-in retry behavior for parseable rate-limit
+responses from both clients.
 
 ```python
-def parse_rate_limit_info(
-    text: str,
-    *,
-    now: datetime | None = None,
-    local_tz: tzinfo | None = None,
-) -> RateLimitInfo: ...
+@dataclass(frozen=True)
+class RateLimitRetryPolicy:
+    max_wait_seconds: float | None
+    label: str | None = None
 ```
 
-Supported patterns:
+Behavior:
 
-- `retry after 3600`
-- `retry-after: 3600`
-- `resets in 2 hours 30 minutes`
-- `resets in 4h 23m`
-- `resets in 10 minutes`
-- `resets at 15:00`
-- `resets at 3:00 PM`
-- `resets 3am`
-- messages including timezone tags such as `(Europe/Madrid)`
+- without a policy, rate limits raise immediately
+- with a policy, the client sleeps and retries only when `retry_after_seconds`
+  was parsed
+- if the next wait exceeds the remaining `max_wait_seconds` budget, the client
+  re-raises the same typed rate-limit error
+- each retry sleep is logged at `WARNING`
 
-### Example
+## Logging
 
-```python
-from stan_ai_client import ClaudeCodeClient, ClaudeRateLimitError, RateLimitRetryPolicy
+Both clients use Python's stdlib `logging`.
 
-client = ClaudeCodeClient()
+At `INFO`:
 
-result = client.run_json(
-    "Summarize this article.",
-    rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=5 * 60 * 60),
-)
-```
+- run start
+- output mode
+- model
+- effort or reasoning effort
+- cwd
+- input mode
+- timeout
+- prompt length
+- session/resume state
+- run finish
+- elapsed time
+- stdout/stderr sizes
 
-For user-facing workflows where the application should not sleep, omit the policy and catch the typed error:
+At `DEBUG`:
 
-```python
-try:
-    result = client.run_json("Summarize this article.")
-except ClaudeRateLimitError as exc:
-    print(exc.reset_at or exc.retry_after_seconds)
-```
+- redacted argv
+- parsed payload metadata when available
+- structured mode state
+- full prompt text only if `log_prompts=True`
 
-## Session Usage
+At `WARNING` or `ERROR`:
 
-### Resume a known session
+- missing executable
+- timeout
+- protocol errors
+- process errors
+- rate-limit details
+- rate-limit retry waits and wait-budget refusals
 
-```python
-from stan_ai_client import ClaudeCodeClient, RunOptions
-
-client = ClaudeCodeClient()
-result = client.run_json(
-    "Continue the task.",
-    options=RunOptions(session_id="your-session-id"),
-)
-```
-
-### Continue the most recent session
-
-```python
-from stan_ai_client import ClaudeCodeClient, RunOptions
-
-client = ClaudeCodeClient()
-result = client.run_json(
-    "Continue the task.",
-    options=RunOptions(continue_last_session=True),
-)
-```
-
-### Fork a resumed or continued session
-
-```python
-from stan_ai_client import ClaudeCodeClient, RunOptions
-
-client = ClaudeCodeClient()
-result = client.run_json(
-    "Continue but fork.",
-    options=RunOptions(
-        continue_last_session=True,
-        fork_session=True,
-    ),
-)
-```
-
-Invalid combination:
-
-```python
-RunOptions(
-    session_id="abc",
-    continue_last_session=True,
-)
-```
-
-That raises `ValueError`.
-
-## Common Patterns
-
-### Run inside a directory so Claude tools can read local files
-
-```python
-from pathlib import Path
-
-from stan_ai_client import ClaudeCodeClient, RunOptions
-
-client = ClaudeCodeClient()
-result = client.run_json(
-    "Summarize this repository.",
-    options=RunOptions(
-        cwd=Path("/path/to/repo"),
-        allowed_tools=("Read", "Glob", "Grep", "Bash"),
-    ),
-)
-```
-
-### Use a shared baseline client with per-call overrides
-
-```python
-from stan_ai_client import ClaudeCodeClient, RunOptions
-
-client = ClaudeCodeClient(
-    default_model="claude-opus-4-6",
-    default_effort="max",
-    default_options=RunOptions(
-        allowed_tools=("Read", "Glob"),
-        timeout_seconds=180,
-    ),
-)
-
-result = client.run_json(
-    "Do the task.",
-    options=RunOptions(
-        cwd=".",
-        extra_args=("--debug",),
-    ),
-)
-```
-
-### Plain-text generation
-
-```python
-from stan_ai_client import ClaudeCodeClient
-
-client = ClaudeCodeClient()
-result = client.run_text("Output valid YAML only.")
-print(result.text)
-```
+Prompt text is not logged unless `log_prompts=True`.
 
 ## Internal Command Behavior
 
-Current command construction behavior:
+Claude:
 
-- text mode always requests `--output-format text`
-- JSON mode always requests `--output-format json`
-- structured mode always requests `--output-format json`
-- structured mode adds `--json-schema <compact-json>`
-- both modes always use `claude -p`
-- prompt goes over stdin by default
-- `argv` mode appends the prompt directly to argv
-- environment is copied from the parent process, then overridden by `RunOptions.env`
+- text mode requests `claude -p --output-format text`
+- JSON mode requests `claude -p --output-format json`
+- structured mode requests JSON mode and adds `--json-schema <compact-json>`
+- stdin mode sends the prompt through stdin
+- argv mode appends the prompt directly to argv
+
+Codex:
+
+- text mode runs `codex exec`
+- JSON mode adds `--json`
+- structured mode adds `--output-schema <tempfile>`
+- stdin mode sends the prompt through stdin with `codex exec -`
+- argv mode appends the prompt directly to argv
+- `bypassPermissions` adds `--dangerously-bypass-approvals-and-sandbox`
+
+Both clients copy `os.environ`, merge `options.env`, preserve raw stdout/stderr
+on results and errors, and run synchronously through `subprocess.run`.
 
 ## Examples Included In The Repo
 
 - [examples/smoke_test.py](./examples/smoke_test.py)
+- [examples/codex_smoke_test.py](./examples/codex_smoke_test.py)
 - [examples/summarize_article.py](./examples/summarize_article.py)
 - [examples/tag_article.py](./examples/tag_article.py)
 - [examples/logging_demo.py](./examples/logging_demo.py)
+- [examples/rate_limit_retry.py](./examples/rate_limit_retry.py)
 
 ## Testing
 
@@ -810,16 +540,24 @@ Run type checks:
 mypy src tests
 ```
 
+Run lint:
+
+```bash
+ruff check .
+```
+
 ## Current Limitations
 
 - no streaming support
 - no async API
 - no background scheduler or persistent job queue
 - no standalone CLI wrapper command
-- no first-class typed flags yet for every Claude Code option
+- no direct Anthropic or OpenAI API calls
+- no first-class typed wrapper yet for every Claude Code or Codex flag
 - structured mode accepts dict-backed JSON Schema only
 
-For unsupported Claude CLI flags, use `extra_args`.
+For unsupported Claude flags, use `RunOptions(extra_args=...)`. For unsupported
+Codex flags, use `CodexRunOptions(extra_args=...)`.
 
 ## Suggested Usage Boundary
 

@@ -8,7 +8,7 @@ from typing import Any, Generic, TypeVar, cast
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from .exceptions import ClaudeSchemaValidationError
+from .exceptions import StructuredSchemaValidationError
 
 TStructured = TypeVar("TStructured")
 
@@ -24,7 +24,7 @@ class StructuredSchema(Generic[TStructured]):
         cls: type["StructuredSchema[TStructured]"], schema: dict[str, Any]
     ) -> "StructuredSchema[TStructured]":
         if not isinstance(schema, dict):
-            raise ClaudeSchemaValidationError(
+            raise StructuredSchemaValidationError(
                 "Structured schema must be a dict-backed JSON Schema object"
             )
 
@@ -33,7 +33,7 @@ class StructuredSchema(Generic[TStructured]):
             Draft202012Validator.check_schema(schema_copy)
             cli_json = json.dumps(schema_copy, separators=(",", ":"))
         except (SchemaError, TypeError, ValueError) as exc:
-            raise ClaudeSchemaValidationError(f"Invalid structured schema: {exc}") from exc
+            raise StructuredSchemaValidationError(f"Invalid structured schema: {exc}") from exc
 
         return cls(
             schema=schema_copy,

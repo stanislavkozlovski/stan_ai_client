@@ -3,31 +3,24 @@ from __future__ import annotations
 from datetime import datetime
 
 from .rate_limits import RateLimitInfo
-from .types import ClaudeJsonPayload, CommandMetadata
+from .types import ClaudeJsonPayload, CodexJsonPayload, CommandMetadata
+
+AIPayload = ClaudeJsonPayload | CodexJsonPayload
 
 
-class ClaudeCodeError(RuntimeError):
+class AIClientError(RuntimeError):
     pass
 
 
-class ClaudeSchemaValidationError(ClaudeCodeError):
+class ExecutableNotFoundError(AIClientError):
     pass
 
 
-class ClaudeExecutableNotFoundError(ClaudeCodeError):
-    def __init__(self, executable: str) -> None:
-        self.executable = executable
-        super().__init__(f"Claude executable not found: {executable}")
+class TimeoutError(AIClientError):
+    pass
 
 
-class ClaudeTimeoutError(ClaudeCodeError):
-    def __init__(self, command: CommandMetadata, timeout_seconds: float) -> None:
-        self.command = command
-        self.timeout_seconds = timeout_seconds
-        super().__init__(f"Claude command timed out after {timeout_seconds}s")
-
-
-class ClaudeProcessError(ClaudeCodeError):
+class ProcessError(AIClientError):
     def __init__(
         self,
         message: str,
@@ -36,7 +29,7 @@ class ClaudeProcessError(ClaudeCodeError):
         returncode: int,
         stdout: str,
         stderr: str,
-        payload: ClaudeJsonPayload | None,
+        payload: AIPayload | None,
     ) -> None:
         self.command = command
         self.returncode = returncode
@@ -46,7 +39,7 @@ class ClaudeProcessError(ClaudeCodeError):
         super().__init__(message)
 
 
-class ClaudeProtocolError(ClaudeCodeError):
+class ProtocolError(AIClientError):
     def __init__(self, message: str, *, command: CommandMetadata, stdout: str, stderr: str) -> None:
         self.command = command
         self.stdout = stdout
@@ -54,7 +47,11 @@ class ClaudeProtocolError(ClaudeCodeError):
         super().__init__(message)
 
 
-class ClaudeStructuredOutputMissingError(ClaudeProtocolError):
+class SchemaValidationError(AIClientError):
+    pass
+
+
+class StructuredOutputMissingError(ProtocolError):
     def __init__(
         self,
         message: str,
@@ -62,13 +59,13 @@ class ClaudeStructuredOutputMissingError(ClaudeProtocolError):
         command: CommandMetadata,
         stdout: str,
         stderr: str,
-        payload: ClaudeJsonPayload,
+        payload: AIPayload,
     ) -> None:
         self.payload = payload
         super().__init__(message, command=command, stdout=stdout, stderr=stderr)
 
 
-class ClaudeStructuredOutputValidationError(ClaudeProtocolError):
+class StructuredOutputValidationError(ProtocolError):
     def __init__(
         self,
         message: str,
@@ -76,7 +73,7 @@ class ClaudeStructuredOutputValidationError(ClaudeProtocolError):
         command: CommandMetadata,
         stdout: str,
         stderr: str,
-        payload: ClaudeJsonPayload,
+        payload: AIPayload,
         structured_output: object,
     ) -> None:
         self.payload = payload
@@ -84,7 +81,7 @@ class ClaudeStructuredOutputValidationError(ClaudeProtocolError):
         super().__init__(message, command=command, stdout=stdout, stderr=stderr)
 
 
-class ClaudeLimitError(ClaudeProcessError):
+class LimitError(ProcessError):
     def __init__(
         self,
         message: str,
@@ -93,7 +90,7 @@ class ClaudeLimitError(ClaudeProcessError):
         returncode: int,
         stdout: str,
         stderr: str,
-        payload: ClaudeJsonPayload | None,
+        payload: AIPayload | None,
         limit: RateLimitInfo,
     ) -> None:
         self.limit = limit
@@ -116,7 +113,56 @@ class ClaudeLimitError(ClaudeProcessError):
         return self.limit.reset_at
 
 
-class ClaudeRateLimitError(ClaudeLimitError):
+class RateLimitError(LimitError):
+    pass
+
+
+class ClaudeCodeError(AIClientError):
+    pass
+
+
+class ClaudeSchemaValidationError(SchemaValidationError, ClaudeCodeError):
+    pass
+
+
+class ClaudeExecutableNotFoundError(ExecutableNotFoundError, ClaudeCodeError):
+    def __init__(self, executable: str) -> None:
+        self.executable = executable
+        super().__init__(f"Claude executable not found: {executable}")
+
+
+class ClaudeTimeoutError(TimeoutError, ClaudeCodeError):
+    def __init__(self, command: CommandMetadata, timeout_seconds: float) -> None:
+        self.command = command
+        self.timeout_seconds = timeout_seconds
+        super().__init__(f"Claude command timed out after {timeout_seconds}s")
+
+
+class ClaudeProcessError(ProcessError, ClaudeCodeError):
+    payload: ClaudeJsonPayload | None
+
+
+class ClaudeProtocolError(ProtocolError, ClaudeCodeError):
+    pass
+
+
+class ClaudeStructuredOutputMissingError(
+    StructuredOutputMissingError, ClaudeProtocolError
+):
+    payload: ClaudeJsonPayload
+
+
+class ClaudeStructuredOutputValidationError(
+    StructuredOutputValidationError, ClaudeProtocolError
+):
+    payload: ClaudeJsonPayload
+
+
+class ClaudeLimitError(LimitError, ClaudeProcessError):
+    pass
+
+
+class ClaudeRateLimitError(RateLimitError, ClaudeLimitError):
     def __init__(
         self,
         message: str,
@@ -126,6 +172,78 @@ class ClaudeRateLimitError(ClaudeLimitError):
         stdout: str,
         stderr: str,
         payload: ClaudeJsonPayload | None,
+        rate_limit: RateLimitInfo,
+    ) -> None:
+        super().__init__(
+            message,
+            command=command,
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+            payload=payload,
+            limit=rate_limit,
+        )
+
+
+class CodexCodeError(AIClientError):
+    pass
+
+
+class CodexSchemaValidationError(SchemaValidationError, CodexCodeError):
+    pass
+
+
+class StructuredSchemaValidationError(
+    ClaudeSchemaValidationError, CodexSchemaValidationError
+):
+    pass
+
+
+class CodexExecutableNotFoundError(ExecutableNotFoundError, CodexCodeError):
+    def __init__(self, executable: str) -> None:
+        self.executable = executable
+        super().__init__(f"Codex executable not found: {executable}")
+
+
+class CodexTimeoutError(TimeoutError, CodexCodeError):
+    def __init__(self, command: CommandMetadata, timeout_seconds: float) -> None:
+        self.command = command
+        self.timeout_seconds = timeout_seconds
+        super().__init__(f"Codex command timed out after {timeout_seconds}s")
+
+
+class CodexProcessError(ProcessError, CodexCodeError):
+    payload: CodexJsonPayload | None
+
+
+class CodexProtocolError(ProtocolError, CodexCodeError):
+    pass
+
+
+class CodexStructuredOutputMissingError(StructuredOutputMissingError, CodexProtocolError):
+    payload: CodexJsonPayload
+
+
+class CodexStructuredOutputValidationError(
+    StructuredOutputValidationError, CodexProtocolError
+):
+    payload: CodexJsonPayload
+
+
+class CodexLimitError(LimitError, CodexProcessError):
+    pass
+
+
+class CodexRateLimitError(RateLimitError, CodexLimitError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        command: CommandMetadata,
+        returncode: int,
+        stdout: str,
+        stderr: str,
+        payload: CodexJsonPayload | None,
         rate_limit: RateLimitInfo,
     ) -> None:
         super().__init__(

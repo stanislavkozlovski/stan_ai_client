@@ -222,7 +222,7 @@ def test_rate_limit_policy_retries_json_after_parsed_wait(
     caplog.set_level(logging.WARNING, logger=logger.name)
     client = ClaudeCodeClient(logger=logger)
     sleeps: list[float] = []
-    monkeypatch.setattr("stan_ai_client.client.time.sleep", sleeps.append)
+    monkeypatch.setattr("stan_ai_client.claude.time.sleep", sleeps.append)
 
     result = client.run_json(
         "hello",
@@ -255,7 +255,7 @@ def test_rate_limit_policy_refuses_json_wait_over_budget(
     caplog.set_level(logging.WARNING, logger=logger.name)
     client = ClaudeCodeClient(logger=logger)
     sleeps: list[float] = []
-    monkeypatch.setattr("stan_ai_client.client.time.sleep", sleeps.append)
+    monkeypatch.setattr("stan_ai_client.claude.time.sleep", sleeps.append)
 
     with pytest.raises(ClaudeRateLimitError) as excinfo:
         client.run_json(
@@ -288,7 +288,7 @@ def test_rate_limit_policy_refuses_json_without_retry_metadata(
     caplog.set_level(logging.WARNING, logger=logger.name)
     client = ClaudeCodeClient(logger=logger)
     sleeps: list[float] = []
-    monkeypatch.setattr("stan_ai_client.client.time.sleep", sleeps.append)
+    monkeypatch.setattr("stan_ai_client.claude.time.sleep", sleeps.append)
 
     with pytest.raises(ClaudeRateLimitError) as excinfo:
         client.run_json(
@@ -310,7 +310,7 @@ def test_rate_limit_policy_refuses_non_positive_retry_wait(
     caplog.set_level(logging.WARNING, logger=logger.name)
     client = ClaudeCodeClient(logger=logger)
     sleeps: list[float] = []
-    monkeypatch.setattr("stan_ai_client.client.time.sleep", sleeps.append)
+    monkeypatch.setattr("stan_ai_client.claude.time.sleep", sleeps.append)
     error = ClaudeRateLimitError(
         "rate limited",
         command=CommandMetadata(argv=("claude",), cwd=None, elapsed_ms=0.0),
@@ -362,7 +362,7 @@ def test_rate_limit_policy_uses_cumulative_wait_budget(
 
     client = ClaudeCodeClient()
     sleeps: list[float] = []
-    monkeypatch.setattr("stan_ai_client.client.time.sleep", sleeps.append)
+    monkeypatch.setattr("stan_ai_client.claude.time.sleep", sleeps.append)
 
     with pytest.raises(ClaudeRateLimitError):
         client.run_json(
@@ -395,7 +395,7 @@ def test_rate_limit_policy_retries_text_mode(monkeypatch: pytest.MonkeyPatch) ->
 
     client = ClaudeCodeClient()
     sleeps: list[float] = []
-    monkeypatch.setattr("stan_ai_client.client.time.sleep", sleeps.append)
+    monkeypatch.setattr("stan_ai_client.claude.time.sleep", sleeps.append)
 
     result = client.run_text(
         "hello",
@@ -428,7 +428,7 @@ def test_rate_limit_policy_retries_structured_mode(monkeypatch: pytest.MonkeyPat
 
     client = ClaudeCodeClient()
     sleeps: list[float] = []
-    monkeypatch.setattr("stan_ai_client.client.time.sleep", sleeps.append)
+    monkeypatch.setattr("stan_ai_client.claude.time.sleep", sleeps.append)
     schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
         {
             "type": "object",
