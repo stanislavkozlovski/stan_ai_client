@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from stan_ai_client import (
+    AIClientTimeoutError,
     ClaudeCodeClient,
     CommandMetadata,
     ClaudeExecutableNotFoundError,
@@ -17,6 +18,7 @@ from stan_ai_client import (
     ClaudeRateLimitError,
     ClaudeStructuredOutputMissingError,
     ClaudeStructuredOutputValidationError,
+    ClaudeTimeoutError,
     RateLimitInfo,
     RateLimitRetryPolicy,
     RunOptions,
@@ -463,6 +465,10 @@ def test_missing_executable_is_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
     client = ClaudeCodeClient(executable="claude")
     with pytest.raises(ClaudeExecutableNotFoundError):
         client.run_text("hello")
+
+
+def test_claude_timeout_error_uses_provider_neutral_base() -> None:
+    assert issubclass(ClaudeTimeoutError, AIClientTimeoutError)
 
 
 def test_logging_hides_prompt_text_by_default(

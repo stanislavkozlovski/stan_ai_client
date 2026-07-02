@@ -86,9 +86,22 @@ class ClaudeCodeClient:
 Methods:
 
 ```python
-def run_text(..., options: RunOptions | None = None) -> TextRunResult: ...
-def run_json(..., options: RunOptions | None = None) -> JsonRunResult: ...
-def run_structured(..., schema: StructuredSchema[T], options: RunOptions | None = None) -> StructuredRunResult[T]: ...
+def run_text(
+    ...,
+    options: RunOptions | None = None,
+    rate_limit_policy: RateLimitRetryPolicy | None = None,
+) -> TextRunResult: ...
+def run_json(
+    ...,
+    options: RunOptions | None = None,
+    rate_limit_policy: RateLimitRetryPolicy | None = None,
+) -> JsonRunResult: ...
+def run_structured(
+    ...,
+    schema: StructuredSchema[T],
+    options: RunOptions | None = None,
+    rate_limit_policy: RateLimitRetryPolicy | None = None,
+) -> StructuredRunResult[T]: ...
 ```
 
 ### `CodexClient`
@@ -112,9 +125,22 @@ class CodexClient:
 Methods:
 
 ```python
-def run_text(..., options: CodexRunOptions | None = None) -> TextRunResult: ...
-def run_json(..., options: CodexRunOptions | None = None) -> CodexJsonRunResult: ...
-def run_structured(..., schema: StructuredSchema[T], options: CodexRunOptions | None = None) -> CodexStructuredRunResult[T]: ...
+def run_text(
+    ...,
+    options: CodexRunOptions | None = None,
+    rate_limit_policy: RateLimitRetryPolicy | None = None,
+) -> TextRunResult: ...
+def run_json(
+    ...,
+    options: CodexRunOptions | None = None,
+    rate_limit_policy: RateLimitRetryPolicy | None = None,
+) -> CodexJsonRunResult: ...
+def run_structured(
+    ...,
+    schema: StructuredSchema[T],
+    options: CodexRunOptions | None = None,
+    rate_limit_policy: RateLimitRetryPolicy | None = None,
+) -> CodexStructuredRunResult[T]: ...
 ```
 
 `CodexClient` defaults to `bypassPermissions`, which adds
@@ -422,8 +448,8 @@ Provider-specific exceptions remain available:
 Provider-neutral base classes are also exported:
 
 - `AIClientError`
+- `AIClientTimeoutError`
 - `ExecutableNotFoundError`
-- `TimeoutError`
 - `ProcessError`
 - `ProtocolError`
 - `SchemaValidationError`

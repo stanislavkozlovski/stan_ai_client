@@ -3,6 +3,7 @@ from .claude import ClaudeCodeClient
 from .codex import CodexClient
 from .exceptions import (
     AIClientError,
+    AIClientTimeoutError,
     ClaudeCodeError,
     ClaudeExecutableNotFoundError,
     ClaudeLimitError,
@@ -32,7 +33,6 @@ from .exceptions import (
     StructuredSchemaValidationError,
     StructuredOutputMissingError,
     StructuredOutputValidationError,
-    TimeoutError,
 )
 from .rate_limits import RateLimitInfo, parse_rate_limit_info
 from .schema import StructuredSchema
@@ -55,6 +55,7 @@ __version__ = get_version()
 __all__ = [
     "__version__",
     "AIClientError",
+    "AIClientTimeoutError",
     "ClaudeCodeClient",
     "ClaudeCodeError",
     "ClaudeExecutableNotFoundError",
@@ -99,6 +100,5 @@ __all__ = [
     "StructuredOutputMissingError",
     "StructuredOutputValidationError",
     "TextRunResult",
-    "TimeoutError",
     "parse_rate_limit_info",
 ]

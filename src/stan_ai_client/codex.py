@@ -759,6 +759,7 @@ class CodexClient:
 def _redact_argv(argv: tuple[str, ...], *, prompt_in_argv: bool) -> tuple[str, ...]:
     redacted: list[str] = []
     replacement_for_next: str | None = None
+    resume_session_arg_index = _resume_session_arg_index(argv)
     for index, value in enumerate(argv):
         if replacement_for_next is not None:
             redacted.append(replacement_for_next)
@@ -768,8 +769,21 @@ def _redact_argv(argv: tuple[str, ...], *, prompt_in_argv: bool) -> tuple[str, .
             redacted.append(value)
             replacement_for_next = "<redacted>"
             continue
+        if index == resume_session_arg_index:
+            redacted.append("<redacted>")
+            continue
         if prompt_in_argv and index == len(argv) - 1:
             redacted.append("<prompt>")
             continue
         redacted.append(value)
     return tuple(redacted)
+
+
+def _resume_session_arg_index(argv: tuple[str, ...]) -> int | None:
+    if "resume" not in argv or "--last" in argv or len(argv) < 2:
+        return None
+
+    session_index = len(argv) - 2
+    if argv[session_index] == "-":
+        return None
+    return session_index

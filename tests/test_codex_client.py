@@ -9,15 +9,17 @@ from typing import Any
 import pytest
 
 from stan_ai_client import (
+    AIClientTimeoutError,
     CodexClient,
     CodexExecutableNotFoundError,
-    CodexStructuredRunResult,
     CodexProcessError,
     CodexProtocolError,
     CodexRateLimitError,
     CodexRunOptions,
+    CodexStructuredRunResult,
     CodexStructuredOutputMissingError,
     CodexStructuredOutputValidationError,
+    CodexTimeoutError,
     ExecutableNotFoundError,
     RateLimitRetryPolicy,
     StructuredSchema,
@@ -372,6 +374,10 @@ def test_codex_missing_executable_is_wrapped(monkeypatch: pytest.MonkeyPatch) ->
     assert isinstance(excinfo.value, ExecutableNotFoundError)
 
 
+def test_codex_timeout_error_uses_provider_neutral_base() -> None:
+    assert issubclass(CodexTimeoutError, AIClientTimeoutError)
+
+
 def test_codex_logging_redacts_prompt_and_schema_path(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -400,3 +406,26 @@ def test_codex_logging_redacts_prompt_and_schema_path(
     assert "<redacted>" in caplog.text
     assert "super secret prompt" not in caplog.text
     assert recorder.schema_paths[0] not in caplog.text
+
+
+def test_codex_logging_redacts_resume_session_id(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="done\n", stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    logger = logging.getLogger("stan_ai_client.tests.codex_resume_logging")
+    caplog.set_level(logging.DEBUG, logger=logger.name)
+    client = CodexClient(logger=logger)
+    client.run_text(
+        "super secret prompt",
+        options=CodexRunOptions(input_mode="argv", session_id="thread-secret"),
+    )
+
+    assert "resume" in caplog.text
+    assert "<redacted>" in caplog.text
+    assert "thread-secret" not in caplog.text
+    assert "super secret prompt" not in caplog.text

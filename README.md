@@ -285,6 +285,7 @@ from stan_ai_client import (
     CommandMetadata,
     StructuredSchema,
     AIClientError,
+    AIClientTimeoutError,
     ClaudeCodeError,
     CodexCodeError,
     ClaudeExecutableNotFoundError,

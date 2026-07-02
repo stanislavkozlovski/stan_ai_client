@@ -16,7 +16,7 @@ class ExecutableNotFoundError(AIClientError):
     pass
 
 
-class TimeoutError(AIClientError):
+class AIClientTimeoutError(AIClientError):
     pass
 
 
@@ -131,7 +131,7 @@ class ClaudeExecutableNotFoundError(ExecutableNotFoundError, ClaudeCodeError):
         super().__init__(f"Claude executable not found: {executable}")
 
 
-class ClaudeTimeoutError(TimeoutError, ClaudeCodeError):
+class ClaudeTimeoutError(AIClientTimeoutError, ClaudeCodeError):
     def __init__(self, command: CommandMetadata, timeout_seconds: float) -> None:
         self.command = command
         self.timeout_seconds = timeout_seconds
@@ -205,7 +205,7 @@ class CodexExecutableNotFoundError(ExecutableNotFoundError, CodexCodeError):
         super().__init__(f"Codex executable not found: {executable}")
 
 
-class CodexTimeoutError(TimeoutError, CodexCodeError):
+class CodexTimeoutError(AIClientTimeoutError, CodexCodeError):
     def __init__(self, command: CommandMetadata, timeout_seconds: float) -> None:
         self.command = command
         self.timeout_seconds = timeout_seconds

@@ -18,6 +18,8 @@ def parse_codex_jsonl_payload(text: str) -> CodexJsonPayload:
     error: dict[str, Any] | None = None
 
     for line in raw.splitlines():
+        if not line.strip():
+            continue
         parsed = json.loads(line)
         if not isinstance(parsed, dict):
             raise ValueError("expected each Codex JSONL line to be a JSON object")

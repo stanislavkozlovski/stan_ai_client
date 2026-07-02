@@ -37,6 +37,22 @@ def test_parse_codex_jsonl_payload_preserves_error_event() -> None:
     assert payload.error == {"type": "error", "message": "Rate limit exceeded"}
 
 
+def test_parse_codex_jsonl_payload_skips_blank_lines() -> None:
+    payload = parse_codex_jsonl_payload(
+        "\n".join(
+            [
+                '{"type":"thread.started","thread_id":"thread-1"}',
+                "",
+                "  ",
+                '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}',
+            ]
+        )
+    )
+
+    assert payload.thread_id == "thread-1"
+    assert payload.result == "done"
+    assert len(payload.events) == 2
+
+
 def test_try_parse_codex_jsonl_payload_returns_none_for_invalid_jsonl() -> None:
     assert try_parse_codex_jsonl_payload("not json") is None
-
