@@ -27,6 +27,24 @@ from stan_ai_client import (
 )
 
 
+def test_client_module_reexports_legacy_symbols() -> None:
+    from stan_ai_client.client import (  # noqa: PLC0415
+        ClaudeProcessError as ClientModuleClaudeProcessError,
+        JsonRunResult as ClientModuleJsonRunResult,
+        RateLimitRetryPolicy as ClientModuleRateLimitRetryPolicy,
+        RunOptions as ClientModuleRunOptions,
+        StructuredSchema as ClientModuleStructuredSchema,
+        TextRunResult as ClientModuleTextRunResult,
+    )
+
+    assert ClientModuleRunOptions is RunOptions
+    assert ClientModuleJsonRunResult.__name__ == "JsonRunResult"
+    assert ClientModuleTextRunResult.__name__ == "TextRunResult"
+    assert ClientModuleRateLimitRetryPolicy is RateLimitRetryPolicy
+    assert ClientModuleStructuredSchema is StructuredSchema
+    assert ClientModuleClaudeProcessError is ClaudeProcessError
+
+
 class RunRecorder:
     def __init__(
         self,

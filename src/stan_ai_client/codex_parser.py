@@ -62,7 +62,11 @@ def try_parse_codex_jsonl_payload(text: str) -> CodexJsonPayload | None:
         return None
 
 
-def make_codex_structured_payload(structured_output: object) -> CodexJsonPayload:
+def make_codex_structured_payload(
+    structured_output: object,
+    *,
+    structured_output_present: bool = True,
+) -> CodexJsonPayload:
     return CodexJsonPayload(
         thread_id=None,
         result=None,
@@ -70,7 +74,7 @@ def make_codex_structured_payload(structured_output: object) -> CodexJsonPayload
         events=(),
         error=None,
         structured_output=structured_output,
-        _structured_output_present=True,
+        _structured_output_present=structured_output_present,
     )
 
 

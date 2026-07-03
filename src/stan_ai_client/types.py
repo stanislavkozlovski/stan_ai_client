@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Generic, Literal, Mapping, TypeVar
 
 Effort = Literal["low", "medium", "high", "max"]
-ReasoningEffort = Literal["low", "medium", "high", "xhigh"]
+ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
 PermissionMode = Literal[
     "acceptEdits",
     "bypassPermissions",
@@ -47,7 +47,7 @@ class CodexRunOptions:
     model: str | None = None
     reasoning_effort: ReasoningEffort | None = None
     timeout_seconds: float | None = None
-    input_mode: InputMode = "stdin"
+    input_mode: InputMode | None = None
     permission_mode: CodexPermissionMode | None = None
     session_id: str | None = None
     continue_last_session: bool | None = None

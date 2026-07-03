@@ -183,7 +183,7 @@ class CodexClient:
             self._log_protocol_error(error)
             raise error
 
-        if payload.error is not None:
+        if _payload_has_event_type(payload, "turn.failed"):
             raise self._build_process_error(
                 metadata,
                 returncode=completed.returncode,
@@ -272,7 +272,10 @@ class CodexClient:
             )
 
         if not stdout.strip():
-            payload = make_codex_structured_payload(None)
+            payload = make_codex_structured_payload(
+                None,
+                structured_output_present=False,
+            )
             missing_error = CodexStructuredOutputMissingError(
                 "Codex returned empty output in structured mode",
                 command=metadata,
@@ -416,15 +419,15 @@ class CodexClient:
 
         argv = [self.executable, "exec"]
         is_resume = effective.session_id is not None or effective.continue_last_session
-        if is_resume:
-            argv.append("resume")
-
         self._append_common_args(
             argv,
             effective=effective,
             json_output=json_output,
             output_schema_path=output_schema_path,
         )
+
+        if is_resume:
+            argv.append("resume")
 
         if effective.continue_last_session:
             argv.append("--last")
@@ -467,7 +470,7 @@ class CodexClient:
         if effective.permission_mode == "bypassPermissions":
             argv.append(BYPASS_APPROVALS_AND_SANDBOX_FLAG)
         if effective.cwd is not None:
-            argv.extend(["--cd", str(effective.cwd)])
+            argv.extend(["--cd", str(Path(effective.cwd).resolve())])
         if effective.profile is not None:
             argv.extend(["--profile", effective.profile])
         if effective.config_overrides is not None:
@@ -628,7 +631,11 @@ class CodexClient:
             if override.ignore_rules is not None
             else (default.ignore_rules if default.ignore_rules is not None else False)
         )
-        input_mode = override.input_mode if override.input_mode is not None else default.input_mode
+        input_mode = (
+            override.input_mode
+            if override.input_mode is not None
+            else (default.input_mode if default.input_mode is not None else "stdin")
+        )
         add_dirs = override.add_dirs if override.add_dirs is not None else default.add_dirs
         profile = override.profile if override.profile is not None else default.profile
         config_overrides = (
@@ -777,6 +784,10 @@ def _redact_argv(argv: tuple[str, ...], *, prompt_in_argv: bool) -> tuple[str, .
             continue
         redacted.append(value)
     return tuple(redacted)
+
+
+def _payload_has_event_type(payload: CodexJsonPayload, event_type: str) -> bool:
+    return any(event.get("type") == event_type for event in payload.events)
 
 
 def _resume_session_arg_index(argv: tuple[str, ...]) -> int | None:

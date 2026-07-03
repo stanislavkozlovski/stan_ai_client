@@ -89,6 +89,20 @@ def test_codex_run_text_uses_stdin_and_default_bypass(
     assert 'model_reasoning_effort="xhigh"' in argv
 
 
+def test_codex_run_text_accepts_minimal_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="done\n", stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    client = CodexClient(default_reasoning_effort="minimal")
+    client.run_text("hello")
+
+    assert 'model_reasoning_effort="minimal"' in recorder.calls[0]["argv"]
+
+
 def test_codex_run_text_can_omit_bypass_and_use_argv_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -126,6 +140,39 @@ def test_codex_run_text_can_omit_bypass_and_use_argv_prompt(
     assert 'web_search="disabled"' in argv
 
 
+def test_codex_run_text_uses_default_input_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="done\n", stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    client = CodexClient(default_options=CodexRunOptions(input_mode="argv"))
+    client.run_text("tag this")
+
+    assert recorder.calls[0]["input"] is None
+    assert recorder.calls[0]["argv"][-1] == "tag this"
+
+
+def test_codex_run_text_normalizes_relative_cwd_for_cd(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="done\n", stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    client = CodexClient()
+    client.run_text("hello", options=CodexRunOptions(cwd="repo"))
+
+    argv = recorder.calls[0]["argv"]
+    assert recorder.calls[0]["cwd"] == "repo"
+    assert argv[argv.index("--cd") + 1] == str(repo_dir.resolve())
+
+
 def test_codex_run_text_can_resume_session(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = RunRecorder(
         subprocess.CompletedProcess(args=[], returncode=0, stdout="done\n", stderr="")
@@ -133,11 +180,21 @@ def test_codex_run_text_can_resume_session(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
 
     client = CodexClient()
-    client.run_text("continue", options=CodexRunOptions(session_id="thread-1"))
+    client.run_text(
+        "continue",
+        options=CodexRunOptions(
+            cwd="/tmp/repo",
+            profile="ci",
+            session_id="thread-1",
+        ),
+    )
 
     argv = recorder.calls[0]["argv"]
-    assert argv[:3] == ("codex", "exec", "resume")
-    assert "thread-1" in argv
+    resume_index = argv.index("resume")
+    assert argv[:2] == ("codex", "exec")
+    assert argv.index("--cd") < resume_index
+    assert argv.index("--profile") < resume_index
+    assert argv[resume_index + 1] == "thread-1"
     assert argv[-1] == "-"
 
 
@@ -151,8 +208,9 @@ def test_codex_run_text_can_continue_last_session(monkeypatch: pytest.MonkeyPatc
     client.run_text("continue", options=CodexRunOptions(continue_last_session=True))
 
     argv = recorder.calls[0]["argv"]
-    assert argv[:3] == ("codex", "exec", "resume")
-    assert "--last" in argv
+    resume_index = argv.index("resume")
+    assert argv[:2] == ("codex", "exec")
+    assert argv[resume_index + 1] == "--last"
     assert argv[-1] == "-"
 
 
@@ -191,14 +249,14 @@ def test_codex_run_json_raises_protocol_error_on_non_jsonl(
         client.run_json("hello")
 
 
-def test_codex_run_json_raises_process_error_from_error_event(
+def test_codex_run_json_raises_process_error_from_turn_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     recorder = RunRecorder(
         subprocess.CompletedProcess(
             args=[],
             returncode=0,
-            stdout='{"type":"error","message":"permission denied"}',
+            stdout='{"type":"turn.failed","message":"permission denied"}',
             stderr="",
         )
     )
@@ -210,7 +268,29 @@ def test_codex_run_json_raises_process_error_from_error_event(
 
     assert "permission denied" in str(excinfo.value)
     assert excinfo.value.payload is not None
-    assert excinfo.value.payload.error == {"type": "error", "message": "permission denied"}
+    assert excinfo.value.payload.error == {"type": "turn.failed", "message": "permission denied"}
+
+
+def test_codex_run_json_preserves_recovered_error_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = "\n".join(
+        [
+            '{"type":"error","message":"temporary failure"}',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}',
+            '{"type":"turn.completed","usage":{"input_tokens":4}}',
+        ]
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    client = CodexClient()
+    result = client.run_json("hello")
+
+    assert result.payload.result == "ok"
+    assert result.payload.error == {"type": "error", "message": "temporary failure"}
 
 
 def test_codex_rate_limit_policy_retries_json_after_parsed_wait(
@@ -327,8 +407,10 @@ def test_codex_run_structured_raises_when_output_is_empty(
     monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
 
     client = CodexClient()
-    with pytest.raises(CodexStructuredOutputMissingError):
+    with pytest.raises(CodexStructuredOutputMissingError) as excinfo:
         client.run_structured("hello", schema=StructuredSchema.from_dict({"type": "object"}))
+
+    assert excinfo.value.payload.has_structured_output is False
 
 
 def test_codex_run_structured_raises_when_output_is_invalid(

@@ -192,9 +192,9 @@ Add a Codex-specific options dataclass instead of overloading `RunOptions`.
 class CodexRunOptions:
     cwd: str | Path | None = None
     model: str | None = None
-    reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = None
+    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
     timeout_seconds: float | None = None
-    input_mode: InputMode = "stdin"
+    input_mode: InputMode | None = None
     permission_mode: Literal["default", "bypassPermissions"] | None = None
     session_id: str | None = None
     continue_last_session: bool | None = None
@@ -212,8 +212,8 @@ class CodexRunOptions:
 `default_permission_mode: Literal["default", "bypassPermissions"] =
 "bypassPermissions"` so the default behavior is explicit at construction time.
 The supported `reasoning_effort` values are typed from the installed Codex model
-catalog: `low`, `medium`, `high`, and `xhigh`. The option is first-class, not
-only available through `config_overrides`.
+catalog: `minimal`, `low`, `medium`, `high`, and `xhigh`. The option is
+first-class, not only available through `config_overrides`.
 
 Keep `StructuredSchema.cli_json` as-is for now. It already means "compact JSON
 string suitable for a CLI argument" and renaming it would create churn without a
