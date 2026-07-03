@@ -238,8 +238,7 @@ class GrokClient:
 
         if (
             envelope_payload is not None
-            and _is_grok_envelope_metadata_payload(envelope_payload)
-            and not envelope_payload.has_structured_output
+            and _is_grok_structured_output_failure_payload(envelope_payload)
         ):
             self.logger.debug("Grok structuredOutput missing")
             missing_error = GrokStructuredOutputMissingError(
@@ -608,12 +607,12 @@ class GrokClient:
         payload: GrokJsonPayload | None,
     ) -> GrokProcessError:
         error_text = summarize_grok_error_text(payload=payload, stdout=stdout, stderr=stderr)
+        normalized_error_text = error_text.lower().replace("_", "-").replace(" ", "-")
         if (
             is_rate_limit_text(error_text)
-            or "rate limit" in error_text.lower()
-            or "429" in error_text
-            or "resource-exhausted" in error_text
-            or "You've hit the rate limit" in error_text
+            or "429" in normalized_error_text
+            or "resource-exhausted" in normalized_error_text
+            or "you've-hit-the-rate-limit" in normalized_error_text
         ):
             rate_limit = parse_rate_limit_info(error_text)
             self.logger.warning(
@@ -793,6 +792,17 @@ def _redact_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
 
 def _is_grok_structured_envelope_payload(payload: GrokJsonPayload) -> bool:
     return payload.has_structured_output and _is_grok_envelope_metadata_payload(payload)
+
+
+def _is_grok_structured_output_failure_payload(payload: GrokJsonPayload) -> bool:
+    if payload.has_structured_output:
+        return False
+    if (
+        "structuredOutputError" in payload.extras
+        or "structured_output_error" in payload.extras
+    ):
+        return True
+    return payload.text is not None and _is_grok_envelope_metadata_payload(payload)
 
 
 def _is_grok_envelope_metadata_payload(payload: GrokJsonPayload) -> bool:

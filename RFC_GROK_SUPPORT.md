@@ -111,7 +111,7 @@ These differences are fundamental to the CLI contract and must be accepted (or w
 - **Error and rate-limit protocol**: Less structured than Claude's JSON envelope.
   - Success is a clean object.
   - Errors may appear as `{"type":"error", "message": "..."}`, plain `Error: ...` text on stdout, or detailed ERROR lines on stderr.
-  - Rate limits surface as recognizable text containing "Rate limited", "429", "resource-exhausted", or "You've hit the rate limit".
+  - Rate limits surface as recognizable text containing "Rate limited", "429", "resource-exhausted" / "resource_exhausted" / "Resource exhausted", or "You've hit the rate limit".
   
   All of stdout + stderr is captured. The library will normalize these into typed exceptions (`GrokRateLimitError`, `GrokProcessError`, etc.) the same way the other clients do. The important property is that errors are reliably detected and the raw output is preserved for debugging.
 
@@ -168,7 +168,7 @@ flowchart LR
 - New exception hierarchy mirrors the existing one (`GrokExecutableNotFoundError`, `GrokProcessError`, `GrokRateLimitError`, `GrokProtocolError`, `GrokStructuredOutput*Error`, etc.).
 - Public re-exports added via `client.py` or `__init__.py` (following current pattern).
 
-Rate-limit detection will use text patterns (similar to today) plus any Grok-specific strings observed ("Rate limited", "429", "resource-exhausted", "You've hit the rate limit").
+Rate-limit detection will use text patterns (similar to today) plus any Grok-specific strings observed ("Rate limited", "429", "resource-exhausted" / "resource_exhausted" / "Resource exhausted", "You've hit the rate limit").
 
 ## Test Plan
 

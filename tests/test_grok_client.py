@@ -9,6 +9,7 @@ from stan_ai_client import GrokClient, GrokRunOptions
 from stan_ai_client.exceptions import (
     GrokExecutableNotFoundError,
     GrokProcessError,
+    GrokRateLimitError,
     GrokStructuredOutputMissingError,
 )
 from stan_ai_client.schema import StructuredSchema
@@ -299,6 +300,50 @@ def test_run_structured_rejects_envelope_without_structured_output(
 
 
 @patch("stan_ai_client.grok.execute_command")
+def test_run_structured_rejects_structured_output_error_envelope(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = (
+        '{"structuredOutputError": "schema failed", "text": "plain text"}'
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict(
+        {"type": "object"}
+    )
+    client = GrokClient()
+    with pytest.raises(GrokStructuredOutputMissingError) as exc:
+        client.run_structured("return object", schema=schema)
+
+    assert exc.value.payload is not None
+    assert "structuredOutputError" in exc.value.payload.extras
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_accepts_raw_metadata_like_keys(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = '{"sessionId": "abc", "requestId": "req1"}'
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "sessionId": {"type": "string"},
+                "requestId": {"type": "string"},
+            },
+            "required": ["sessionId", "requestId"],
+            "additionalProperties": False,
+        }
+    )
+    client = GrokClient()
+    res = client.run_structured("return metadata-like fields", schema=schema)
+
+    assert res.structured_output == {"sessionId": "abc", "requestId": "req1"}
+
+
+@patch("stan_ai_client.grok.execute_command")
 def test_run_structured_preserves_raw_structured_output_key(mock_exec: Mock) -> None:
     mock_exec.return_value.stdout = '{"structuredOutput": "ok"}'
     mock_exec.return_value.stderr = ""
@@ -351,6 +396,27 @@ def test_error_raises_process_error(mock_exec: Mock) -> None:
     with pytest.raises(GrokProcessError) as exc:
         client.run_text("fail")
     assert "something bad" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "RESOURCE_EXHAUSTED quota exceeded",
+        "Resource exhausted quota exceeded",
+    ],
+)
+@patch("stan_ai_client.grok.execute_command")
+def test_resource_exhausted_raises_rate_limit_error(
+    mock_exec: Mock,
+    message: str,
+) -> None:
+    mock_exec.return_value.stdout = ""
+    mock_exec.return_value.stderr = message
+    mock_exec.return_value.returncode = 1
+
+    client = GrokClient()
+    with pytest.raises(GrokRateLimitError):
+        client.run_text("fail")
 
 
 @patch("stan_ai_client.grok.execute_command")
