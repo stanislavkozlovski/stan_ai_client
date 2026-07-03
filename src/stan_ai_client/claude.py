@@ -10,6 +10,8 @@ from typing import Any, Callable, Mapping, TypeVar
 
 from jsonschema.exceptions import ValidationError
 
+from ._options import first_set, first_set_or
+from ._retry import run_with_rate_limit_retry
 from .exceptions import (
     ClaudeExecutableNotFoundError,
     ClaudeProcessError,
@@ -263,71 +265,13 @@ class ClaudeCodeClient:
         *,
         rate_limit_policy: RateLimitRetryPolicy | None,
     ) -> TRun:
-        if rate_limit_policy is None:
-            return operation()
-
-        total_wait_seconds = 0.0
-        attempt = 0
-
-        while True:
-            attempt += 1
-            try:
-                return operation()
-            except ClaudeRateLimitError as exc:
-                wait_seconds = exc.retry_after_seconds
-                if wait_seconds is None:
-                    self.logger.warning(
-                        "Claude rate limited but no retry metadata was parsed attempt=%d total_wait_seconds=%.1f max_wait_seconds=%s reset_at=%s label=%s",
-                        attempt,
-                        total_wait_seconds,
-                        rate_limit_policy.max_wait_seconds,
-                        exc.reset_at,
-                        rate_limit_policy.label,
-                    )
-                    raise
-
-                wait_seconds_float = float(wait_seconds)
-                if wait_seconds_float <= 0:
-                    self.logger.warning(
-                        "Claude rate limited with non-positive retry wait attempt=%d wait_seconds=%.1f total_wait_seconds=%.1f max_wait_seconds=%s reset_at=%s label=%s",
-                        attempt,
-                        wait_seconds_float,
-                        total_wait_seconds,
-                        rate_limit_policy.max_wait_seconds,
-                        exc.reset_at,
-                        rate_limit_policy.label,
-                    )
-                    raise
-
-                if rate_limit_policy.max_wait_seconds is not None:
-                    remaining_wait_seconds = (
-                        rate_limit_policy.max_wait_seconds - total_wait_seconds
-                    )
-                    if wait_seconds_float > remaining_wait_seconds:
-                        self.logger.warning(
-                            "Claude rate limit exceeds wait budget attempt=%d wait_seconds=%.1f remaining_wait_seconds=%.1f total_wait_seconds=%.1f max_wait_seconds=%.1f reset_at=%s label=%s",
-                            attempt,
-                            wait_seconds_float,
-                            remaining_wait_seconds,
-                            total_wait_seconds,
-                            rate_limit_policy.max_wait_seconds,
-                            exc.reset_at,
-                            rate_limit_policy.label,
-                        )
-                        raise
-
-                total_wait_seconds += wait_seconds_float
-                self.logger.warning(
-                    "Claude rate limited; retrying after reset attempt=%d wait_seconds=%.1f total_wait_seconds=%.1f max_wait_seconds=%s retry_after_seconds=%s reset_at=%s label=%s",
-                    attempt,
-                    wait_seconds_float,
-                    total_wait_seconds,
-                    rate_limit_policy.max_wait_seconds,
-                    exc.retry_after_seconds,
-                    exc.reset_at,
-                    rate_limit_policy.label,
-                )
-                time.sleep(wait_seconds_float)
+        return run_with_rate_limit_retry(
+            operation,
+            rate_limit_policy=rate_limit_policy,
+            logger=self.logger,
+            provider="Claude",
+            rate_limit_error_type=ClaudeRateLimitError,
+        )
 
     def _prepare(
         self,
@@ -518,86 +462,39 @@ class ClaudeCodeClient:
     def _resolve_options(self, options: RunOptions | None) -> ResolvedRunOptions:
         override = options or RunOptions()
         default = self.default_options
-        cwd = override.cwd if override.cwd is not None else default.cwd
-        model = override.model if override.model is not None else (
-            default.model if default.model is not None else self.default_model
-        )
-        effort = override.effort if override.effort is not None else (
-            default.effort if default.effort is not None else self.default_effort
-        )
-        timeout_seconds = (
-            override.timeout_seconds
-            if override.timeout_seconds is not None
-            else (
-                default.timeout_seconds
-                if default.timeout_seconds is not None
-                else self.default_timeout_seconds
-            )
-        )
-        input_mode = override.input_mode if override.input_mode is not None else default.input_mode
-        allowed_tools = (
-            override.allowed_tools if override.allowed_tools is not None else default.allowed_tools
-        )
-        disallowed_tools = (
-            override.disallowed_tools
-            if override.disallowed_tools is not None
-            else default.disallowed_tools
-        )
-        tools = override.tools if override.tools is not None else default.tools
-        add_dirs = override.add_dirs if override.add_dirs is not None else default.add_dirs
-        permission_mode = (
-            override.permission_mode
-            if override.permission_mode is not None
-            else default.permission_mode
-        )
-        system_prompt = (
-            override.system_prompt if override.system_prompt is not None else default.system_prompt
-        )
-        append_system_prompt = (
-            override.append_system_prompt
-            if override.append_system_prompt is not None
-            else default.append_system_prompt
-        )
-        settings = override.settings if override.settings is not None else default.settings
-        session_id = override.session_id if override.session_id is not None else default.session_id
-        continue_last_session = (
-            override.continue_last_session
-            if override.continue_last_session is not None
-            else (
-                default.continue_last_session
-                if default.continue_last_session is not None
-                else False
-            )
-        )
-        fork_session = (
-            override.fork_session
-            if override.fork_session is not None
-            else (default.fork_session if default.fork_session is not None else False)
-        )
-        extra_args = (
-            override.extra_args if override.extra_args is not None else default.extra_args
-        )
-        env = override.env if override.env is not None else default.env
-
         return ResolvedRunOptions(
-            cwd=cwd,
-            model=model,
-            effort=effort,
-            timeout_seconds=float(timeout_seconds),
-            input_mode=input_mode,
-            allowed_tools=allowed_tools,
-            disallowed_tools=disallowed_tools,
-            tools=tools,
-            add_dirs=add_dirs,
-            permission_mode=permission_mode,
-            system_prompt=system_prompt,
-            append_system_prompt=append_system_prompt,
-            settings=settings,
-            session_id=session_id,
-            continue_last_session=continue_last_session,
-            fork_session=fork_session,
-            extra_args=extra_args,
-            env=env,
+            cwd=first_set(override.cwd, default.cwd),
+            model=first_set_or(override.model, default.model, default=self.default_model),
+            effort=first_set_or(override.effort, default.effort, default=self.default_effort),
+            timeout_seconds=float(
+                first_set_or(
+                    override.timeout_seconds,
+                    default.timeout_seconds,
+                    default=self.default_timeout_seconds,
+                )
+            ),
+            input_mode=first_set_or(
+                override.input_mode, default.input_mode, default="stdin"
+            ),
+            allowed_tools=first_set(override.allowed_tools, default.allowed_tools),
+            disallowed_tools=first_set(override.disallowed_tools, default.disallowed_tools),
+            tools=first_set(override.tools, default.tools),
+            add_dirs=first_set(override.add_dirs, default.add_dirs),
+            permission_mode=first_set(override.permission_mode, default.permission_mode),
+            system_prompt=first_set(override.system_prompt, default.system_prompt),
+            append_system_prompt=first_set(
+                override.append_system_prompt, default.append_system_prompt
+            ),
+            settings=first_set(override.settings, default.settings),
+            session_id=first_set(override.session_id, default.session_id),
+            continue_last_session=first_set_or(
+                override.continue_last_session, default.continue_last_session, default=False
+            ),
+            fork_session=first_set_or(
+                override.fork_session, default.fork_session, default=False
+            ),
+            extra_args=first_set(override.extra_args, default.extra_args),
+            env=first_set(override.env, default.env),
         )
 
     def _log_start(

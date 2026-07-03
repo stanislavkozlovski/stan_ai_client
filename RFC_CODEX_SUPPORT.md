@@ -143,6 +143,25 @@ Do this in phases to reduce churn:
 3. Add `codex.py` with independent option resolution and command construction.
 4. Add a small provider factory only if needed.
 
+### Shared internal boundaries
+
+Each backend keeps its own option dataclass and CLI-argv construction, but two
+mechanics that must not drift between backends are centralized:
+
+- `_options.py` (`first_set` / `first_set_or`) is the single definition of run
+  option resolution. Every field in `_resolve_options` resolves as
+  per-call override, then client `default_options`, then (when required) a
+  client-level default. Because there is one rule, the only thing that decides
+  whether `default_options` is honored for a field is whether that field is
+  declared optional — the source of an earlier `input_mode` regression.
+- `_retry.py` (`run_with_rate_limit_retry`) is the single implementation of the
+  sleep-budget rate-limit retry loop. Backends supply only their `provider` log
+  prefix and concrete `RateLimitError` subclass, so the wait-budget accounting
+  cannot diverge between Claude and Codex.
+
+A new backend should route option resolution and retry through these helpers
+rather than re-deriving them.
+
 ## Codex CLI Mapping
 
 `CodexClient` should target `codex exec`.

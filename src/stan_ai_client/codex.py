@@ -12,6 +12,8 @@ from typing import Any, Callable, Mapping, TypeVar
 
 from jsonschema.exceptions import ValidationError
 
+from ._options import first_set, first_set_or
+from ._retry import run_with_rate_limit_retry
 from .codex_parser import (
     make_codex_structured_payload,
     summarize_codex_error_text,
@@ -43,6 +45,7 @@ from .types import (
 )
 
 DEFAULT_LOGGER = logging.getLogger("stan_ai_client")
+DEFAULT_INPUT_MODE: InputMode = "stdin"
 BYPASS_APPROVALS_AND_SANDBOX_FLAG = "--dangerously-bypass-approvals-and-sandbox"
 OUTPUT_SCHEMA_ARG_FLAG = "--output-schema"
 REDACTED_ARG_FLAGS = {
@@ -343,71 +346,13 @@ class CodexClient:
         *,
         rate_limit_policy: RateLimitRetryPolicy | None,
     ) -> TRun:
-        if rate_limit_policy is None:
-            return operation()
-
-        total_wait_seconds = 0.0
-        attempt = 0
-
-        while True:
-            attempt += 1
-            try:
-                return operation()
-            except CodexRateLimitError as exc:
-                wait_seconds = exc.retry_after_seconds
-                if wait_seconds is None:
-                    self.logger.warning(
-                        "Codex rate limited but no retry metadata was parsed attempt=%d total_wait_seconds=%.1f max_wait_seconds=%s reset_at=%s label=%s",
-                        attempt,
-                        total_wait_seconds,
-                        rate_limit_policy.max_wait_seconds,
-                        exc.reset_at,
-                        rate_limit_policy.label,
-                    )
-                    raise
-
-                wait_seconds_float = float(wait_seconds)
-                if wait_seconds_float <= 0:
-                    self.logger.warning(
-                        "Codex rate limited with non-positive retry wait attempt=%d wait_seconds=%.1f total_wait_seconds=%.1f max_wait_seconds=%s reset_at=%s label=%s",
-                        attempt,
-                        wait_seconds_float,
-                        total_wait_seconds,
-                        rate_limit_policy.max_wait_seconds,
-                        exc.reset_at,
-                        rate_limit_policy.label,
-                    )
-                    raise
-
-                if rate_limit_policy.max_wait_seconds is not None:
-                    remaining_wait_seconds = (
-                        rate_limit_policy.max_wait_seconds - total_wait_seconds
-                    )
-                    if wait_seconds_float > remaining_wait_seconds:
-                        self.logger.warning(
-                            "Codex rate limit exceeds wait budget attempt=%d wait_seconds=%.1f remaining_wait_seconds=%.1f total_wait_seconds=%.1f max_wait_seconds=%.1f reset_at=%s label=%s",
-                            attempt,
-                            wait_seconds_float,
-                            remaining_wait_seconds,
-                            total_wait_seconds,
-                            rate_limit_policy.max_wait_seconds,
-                            exc.reset_at,
-                            rate_limit_policy.label,
-                        )
-                        raise
-
-                total_wait_seconds += wait_seconds_float
-                self.logger.warning(
-                    "Codex rate limited; retrying after reset attempt=%d wait_seconds=%.1f total_wait_seconds=%.1f max_wait_seconds=%s retry_after_seconds=%s reset_at=%s label=%s",
-                    attempt,
-                    wait_seconds_float,
-                    total_wait_seconds,
-                    rate_limit_policy.max_wait_seconds,
-                    exc.retry_after_seconds,
-                    exc.reset_at,
-                    rate_limit_policy.label,
-                )
-                time.sleep(wait_seconds_float)
+        return run_with_rate_limit_retry(
+            operation,
+            rate_limit_policy=rate_limit_policy,
+            logger=self.logger,
+            provider="Codex",
+            rate_limit_error_type=CodexRateLimitError,
+        )
 
     def _prepare(
         self,
@@ -592,100 +537,47 @@ class CodexClient:
     def _resolve_options(self, options: CodexRunOptions | None) -> ResolvedCodexRunOptions:
         override = options or CodexRunOptions()
         default = self.default_options
-        cwd = override.cwd if override.cwd is not None else default.cwd
-        model = override.model if override.model is not None else (
-            default.model if default.model is not None else self.default_model
-        )
-        reasoning_effort = (
-            override.reasoning_effort
-            if override.reasoning_effort is not None
-            else (
-                default.reasoning_effort
-                if default.reasoning_effort is not None
-                else self.default_reasoning_effort
-            )
-        )
-        timeout_seconds = (
-            override.timeout_seconds
-            if override.timeout_seconds is not None
-            else (
-                default.timeout_seconds
-                if default.timeout_seconds is not None
-                else self.default_timeout_seconds
-            )
-        )
-        permission_mode = (
-            override.permission_mode
-            if override.permission_mode is not None
-            else (
-                default.permission_mode
-                if default.permission_mode is not None
-                else self.default_permission_mode
-            )
-        )
-        session_id = override.session_id if override.session_id is not None else default.session_id
-        continue_last_session = (
-            override.continue_last_session
-            if override.continue_last_session is not None
-            else (
-                default.continue_last_session
-                if default.continue_last_session is not None
-                else False
-            )
-        )
-        skip_git_repo_check = (
-            override.skip_git_repo_check
-            if override.skip_git_repo_check is not None
-            else (
-                default.skip_git_repo_check
-                if default.skip_git_repo_check is not None
-                else False
-            )
-        )
-        ignore_user_config = (
-            override.ignore_user_config
-            if override.ignore_user_config is not None
-            else (default.ignore_user_config if default.ignore_user_config is not None else False)
-        )
-        ignore_rules = (
-            override.ignore_rules
-            if override.ignore_rules is not None
-            else (default.ignore_rules if default.ignore_rules is not None else False)
-        )
-        input_mode = (
-            override.input_mode
-            if override.input_mode is not None
-            else (default.input_mode if default.input_mode is not None else "stdin")
-        )
-        add_dirs = override.add_dirs if override.add_dirs is not None else default.add_dirs
-        profile = override.profile if override.profile is not None else default.profile
-        config_overrides = (
-            override.config_overrides
-            if override.config_overrides is not None
-            else default.config_overrides
-        )
-        extra_args = (
-            override.extra_args if override.extra_args is not None else default.extra_args
-        )
-        env = override.env if override.env is not None else default.env
-
         return ResolvedCodexRunOptions(
-            cwd=cwd,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            timeout_seconds=float(timeout_seconds),
-            input_mode=input_mode,
-            permission_mode=permission_mode,
-            session_id=session_id,
-            continue_last_session=continue_last_session,
-            skip_git_repo_check=skip_git_repo_check,
-            ignore_user_config=ignore_user_config,
-            ignore_rules=ignore_rules,
-            add_dirs=add_dirs,
-            profile=profile,
-            config_overrides=config_overrides,
-            extra_args=extra_args,
-            env=env,
+            cwd=first_set(override.cwd, default.cwd),
+            model=first_set_or(override.model, default.model, default=self.default_model),
+            reasoning_effort=first_set_or(
+                override.reasoning_effort,
+                default.reasoning_effort,
+                default=self.default_reasoning_effort,
+            ),
+            timeout_seconds=float(
+                first_set_or(
+                    override.timeout_seconds,
+                    default.timeout_seconds,
+                    default=self.default_timeout_seconds,
+                )
+            ),
+            input_mode=first_set_or(
+                override.input_mode, default.input_mode, default=DEFAULT_INPUT_MODE
+            ),
+            permission_mode=first_set_or(
+                override.permission_mode,
+                default.permission_mode,
+                default=self.default_permission_mode,
+            ),
+            session_id=first_set(override.session_id, default.session_id),
+            continue_last_session=first_set_or(
+                override.continue_last_session, default.continue_last_session, default=False
+            ),
+            skip_git_repo_check=first_set_or(
+                override.skip_git_repo_check, default.skip_git_repo_check, default=False
+            ),
+            ignore_user_config=first_set_or(
+                override.ignore_user_config, default.ignore_user_config, default=False
+            ),
+            ignore_rules=first_set_or(
+                override.ignore_rules, default.ignore_rules, default=False
+            ),
+            add_dirs=first_set(override.add_dirs, default.add_dirs),
+            profile=first_set(override.profile, default.profile),
+            config_overrides=first_set(override.config_overrides, default.config_overrides),
+            extra_args=first_set(override.extra_args, default.extra_args),
+            env=first_set(override.env, default.env),
         )
 
     def _log_start(
