@@ -254,6 +254,21 @@ class GrokClient:
             )
 
         if outcome.kind == "missing":
+            raw_validation = self._validate_explicit_raw_missing_candidate(
+                schema=schema,
+                outcome=outcome,
+                metadata=metadata,
+            )
+            if raw_validation is not None:
+                payload, structured_output = raw_validation
+                self.logger.debug("Grok raw structured output validation succeeded")
+                return self._build_structured_result(
+                    completed=completed,
+                    metadata=metadata,
+                    payload=payload,
+                    structured_output=structured_output,
+                )
+
             self.logger.debug("Grok structuredOutput missing")
             missing_error = GrokStructuredOutputMissingError(
                 "Grok did not return structuredOutput in structured mode",
@@ -279,6 +294,42 @@ class GrokClient:
             payload=payload,
             structured_output=structured_output,
         )
+
+    def _validate_explicit_raw_missing_candidate(
+        self,
+        *,
+        schema: StructuredSchema[TStructured],
+        outcome: GrokStructuredOutcome,
+        metadata: CommandMetadata,
+    ) -> tuple[GrokJsonPayload, TStructured] | None:
+        for candidate_payload, value in outcome.candidates:
+            if not self._schema_mentions_raw_value_keys(schema, value):
+                continue
+            try:
+                structured_output = schema.validate_response(value)
+            except ValidationError:
+                continue
+            return self._stamp(candidate_payload, metadata), structured_output
+        return None
+
+    @staticmethod
+    def _schema_mentions_raw_value_keys(
+        schema: StructuredSchema[Any],
+        value: Any,
+    ) -> bool:
+        if not isinstance(value, dict):
+            return False
+
+        mentioned_keys: set[str] = set()
+        properties = schema.schema.get("properties")
+        if isinstance(properties, dict):
+            mentioned_keys.update(key for key in properties if isinstance(key, str))
+
+        required = schema.schema.get("required")
+        if isinstance(required, list):
+            mentioned_keys.update(key for key in required if isinstance(key, str))
+
+        return bool(mentioned_keys.intersection(value))
 
     def _validate_structured_candidates(
         self,

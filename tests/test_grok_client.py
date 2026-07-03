@@ -300,6 +300,29 @@ def test_run_structured_rejects_envelope_without_structured_output(
 
 
 @patch("stan_ai_client.grok.execute_command")
+def test_run_structured_accepts_raw_text_with_metadata_like_keys(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = '{"text": "desc", "sessionId": "s1"}'
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "sessionId": {"type": "string"},
+            },
+            "required": ["text", "sessionId"],
+            "additionalProperties": False,
+        }
+    )
+    client = GrokClient()
+    res = client.run_structured("return text and session id", schema=schema)
+
+    assert res.structured_output == {"text": "desc", "sessionId": "s1"}
+
+
+@patch("stan_ai_client.grok.execute_command")
 def test_run_structured_rejects_structured_output_error_envelope(
     mock_exec: Mock,
 ) -> None:

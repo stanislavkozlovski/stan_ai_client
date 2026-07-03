@@ -84,7 +84,8 @@ class GrokStructuredOutcome:
     - ``"error"``: ``payload`` is a Grok ``{"type": "error"}`` envelope; raise a
       process error even when the CLI exited ``0``.
     - ``"missing"``: ``payload`` is an envelope that produced no structuredOutput;
-      raise the structured-output-missing error.
+      raise the structured-output-missing error unless an explicit raw candidate
+      validates against the caller schema.
     - ``"validate"``: ``payload`` is the raw-value payload used for error
       reporting, and ``candidates`` are the ``(payload, value)`` pairs to try
       against the caller schema in order. The first value that validates wins and
@@ -118,7 +119,11 @@ def classify_grok_structured_stdout(stdout: str) -> GrokStructuredOutcome | None
     if envelope is not None and is_grok_error_payload(envelope):
         return GrokStructuredOutcome("error", envelope)
     if envelope is not None and is_grok_structured_output_failure(envelope):
-        return GrokStructuredOutcome("missing", envelope)
+        return GrokStructuredOutcome(
+            "missing",
+            envelope,
+            ((raw_payload, raw_payload.structured_output),),
+        )
 
     candidates: list[tuple[GrokJsonPayload, Any]] = []
     if envelope is not None and is_grok_structured_envelope(envelope):
