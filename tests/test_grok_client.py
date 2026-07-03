@@ -130,6 +130,22 @@ def test_run_json_error_envelope_raises_process_error(mock_exec: Mock) -> None:
 
 
 @patch("stan_ai_client.grok.execute_command")
+def test_run_text_error_envelope_raises_process_error(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = '{"type": "error", "message": "boom"}'
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    client = GrokClient()
+    with pytest.raises(GrokProcessError) as exc:
+        client.run_text("test")
+
+    assert "boom" in str(exc.value)
+    assert exc.value.returncode == 0
+    assert exc.value.payload is not None
+    assert exc.value.payload.extras["type"] == "error"
+
+
+@patch("stan_ai_client.grok.execute_command")
 def test_run_structured(mock_exec: Mock) -> None:
     payload = '{"text": "{\\"ans\\":42}", "stopReason": "EndTurn", "structuredOutput": {"ans": 42}}'
     mock_exec.return_value.stdout = payload
@@ -147,6 +163,28 @@ def test_run_structured(mock_exec: Mock) -> None:
     client = GrokClient()
     res = client.run_structured("return ans", schema=schema)
     assert res.structured_output == {"ans": 42}
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_extracts_envelope_before_permissive_raw_schema(
+    mock_exec: Mock,
+) -> None:
+    payload = (
+        '{"text": "{\\"ans\\":42}", "stopReason": "EndTurn", '
+        '"sessionId": "s1", "structuredOutput": {"ans": 42}}'
+    )
+    mock_exec.return_value.stdout = payload
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict(
+        {"type": "object"}
+    )
+    client = GrokClient()
+    res = client.run_structured("return ans", schema=schema)
+    assert res.structured_output == {"ans": 42}
+    assert res.payload.text == '{"ans":42}'
+    assert res.payload.session_id == "s1"
 
 
 @patch("stan_ai_client.grok.execute_command")
