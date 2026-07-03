@@ -41,14 +41,14 @@ def test_parse_raw_structured_output_preserves_structured_output_key() -> None:
     assert payload.structured_output == {"structuredOutput": "ok"}
 
 
-def test_parse_raw_structured_output_accepts_envelope_with_metadata() -> None:
+def test_parse_raw_structured_output_preserves_envelope_like_keys() -> None:
     payload = parse_grok_json_payload(
-        '{"text": "{\\"x\\":1}", "structuredOutput": {"x": 1}}',
+        '{"text": "desc", "structuredOutput": "ok"}',
         raw_structured_output=True,
     )
     assert payload.has_structured_output is True
-    assert payload.structured_output == {"x": 1}
-    assert payload.text == '{"x":1}'
+    assert payload.structured_output == {"text": "desc", "structuredOutput": "ok"}
+    assert payload.text is None
 
 
 def test_parse_preserves_falsy_structured_output() -> None:

@@ -206,6 +206,29 @@ def test_run_structured_preserves_raw_structured_output_key(mock_exec: Mock) -> 
 
 
 @patch("stan_ai_client.grok.execute_command")
+def test_run_structured_preserves_raw_envelope_like_keys(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = '{"text": "desc", "structuredOutput": "ok"}'
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "structuredOutput": {"type": "string"},
+            },
+            "required": ["text", "structuredOutput"],
+            "additionalProperties": False,
+        }
+    )
+    client = GrokClient()
+    res = client.run_structured("return envelope-like fields", schema=schema)
+    assert res.structured_output == {"text": "desc", "structuredOutput": "ok"}
+    assert res.payload.structured_output == {"text": "desc", "structuredOutput": "ok"}
+
+
+@patch("stan_ai_client.grok.execute_command")
 def test_error_raises_process_error(mock_exec: Mock) -> None:
     mock_exec.return_value.stdout = ""
     mock_exec.return_value.stderr = "Error: something bad"

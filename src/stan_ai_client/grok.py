@@ -231,17 +231,13 @@ class GrokClient:
         try:
             structured_output = schema.validate_response(payload.structured_output)
         except ValidationError as exc:
-            self.logger.debug("Grok structuredOutput validation failed error=%s", exc.message)
-            validation_error = GrokStructuredOutputValidationError(
-                f"Grok returned structuredOutput that does not match the schema: {exc.message}",
-                command=metadata,
-                stdout=completed.stdout,
-                stderr=completed.stderr,
-                payload=payload,
-                structured_output=payload.structured_output,
+            payload, structured_output = self._validate_envelope_structured_output_or_raise(
+                schema=schema,
+                completed=completed,
+                metadata=metadata,
+                raw_payload=payload,
+                validation_error=exc,
             )
-            self._log_protocol_error(validation_error)
-            raise validation_error from exc
 
         self.logger.debug("Grok structuredOutput validation succeeded")
 
@@ -261,6 +257,43 @@ class GrokClient:
             payload=payload,
         )
         return result
+
+    def _validate_envelope_structured_output_or_raise(
+        self,
+        *,
+        schema: StructuredSchema[TStructured],
+        completed: CompletedProcess[str],
+        metadata: CommandMetadata,
+        raw_payload: GrokJsonPayload,
+        validation_error: ValidationError,
+    ) -> tuple[GrokJsonPayload, TStructured]:
+        envelope_payload = try_parse_grok_json_payload(completed.stdout)
+        if envelope_payload is not None:
+            envelope_payload = replace(envelope_payload, duration_ms=int(metadata.elapsed_ms))
+
+        if envelope_payload is not None and envelope_payload.has_structured_output:
+            try:
+                structured_output = schema.validate_response(envelope_payload.structured_output)
+            except ValidationError:
+                pass
+            else:
+                self.logger.debug("Grok envelope structuredOutput validation succeeded")
+                return envelope_payload, structured_output
+
+        self.logger.debug(
+            "Grok structuredOutput validation failed error=%s",
+            validation_error.message,
+        )
+        error = GrokStructuredOutputValidationError(
+            f"Grok returned structured output that does not match the schema: {validation_error.message}",
+            command=metadata,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            payload=raw_payload,
+            structured_output=raw_payload.structured_output,
+        )
+        self._log_protocol_error(error)
+        raise error from validation_error
 
     def _run_with_rate_limit_policy(
         self,
