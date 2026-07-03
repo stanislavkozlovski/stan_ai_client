@@ -90,7 +90,7 @@ def test_run_json_uses_stdin_and_parses_payload(monkeypatch: pytest.MonkeyPatch)
     )
     monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
 
-    client = ClaudeCodeClient(default_model="claude-opus-4-6", default_effort="max")
+    client = ClaudeCodeClient(default_model="claude-opus-4-8", default_effort="max")
     result = client.run_json("hello")
 
     assert result.payload.result == "ok"
@@ -602,7 +602,7 @@ def test_run_structured_passes_schema_and_returns_validated_output(
         }
     )
 
-    client = ClaudeCodeClient(default_model="claude-opus-4-6", default_effort="max")
+    client = ClaudeCodeClient(default_model="claude-opus-4-8", default_effort="max")
     result = client.run_structured("summarize this", schema=schema)
 
     assert result.structured_output == {"summary": "brief"}

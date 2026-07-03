@@ -75,7 +75,7 @@ class ClaudeCodeClient:
         self,
         *,
         executable: str = "claude",
-        default_model: str = "claude-opus-4-6",
+        default_model: str = "claude-opus-4-8",
         default_effort: Effort = "max",
         default_timeout_seconds: float = 120.0,
         default_options: RunOptions | None = None,

@@ -76,7 +76,7 @@ class ClaudeCodeClient:
         self,
         *,
         executable: str = "claude",
-        default_model: str = "claude-opus-4-6",
+        default_model: str = "claude-opus-4-8",
         default_effort: Literal["low", "medium", "high", "max"] = "max",
         default_timeout_seconds: float = 120.0,
         default_options: RunOptions | None = None,
@@ -149,6 +149,27 @@ def run_structured(
 `--dangerously-bypass-approvals-and-sandbox` to `codex exec`. Use
 `CodexRunOptions(permission_mode="default")` or
 `CodexClient(default_permission_mode="default")` to omit that flag.
+
+### `GrokClient`
+
+```python
+class GrokClient:
+    def __init__(
+        self,
+        *,
+        executable: str = "grok",
+        default_model: str = "grok-build",
+        default_effort: Literal["low", "medium", "high", "max"] | None = None,
+        default_timeout_seconds: float = 120.0,
+        default_options: GrokRunOptions | None = None,
+        logger: logging.Logger | None = None,
+        log_prompts: bool = False,
+    ) -> None: ...
+```
+
+GrokClient drives `grok -p`. It always passes `--model` (defaulting to the
+CLI's common default of `grok-build`). Prompt delivery is handled
+transparently inside the client.
 
 ## StructuredSchema
 

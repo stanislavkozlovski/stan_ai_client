@@ -54,7 +54,7 @@ TStructured = TypeVar("TStructured")
 @dataclass(frozen=True)
 class ResolvedGrokRunOptions:
     cwd: str | Path | None
-    model: str | None
+    model: str
     effort: Effort | None
     timeout_seconds: float
     permission_mode: str | None
@@ -76,7 +76,7 @@ class GrokClient:
         self,
         *,
         executable: str = "grok",
-        default_model: str | None = None,
+        default_model: str = "grok-build",
         default_effort: Effort | None = None,
         default_timeout_seconds: float = 120.0,
         default_options: GrokRunOptions | None = None,
@@ -310,8 +310,7 @@ class GrokClient:
         if json_schema is not None:
             argv.extend(["--json-schema", json_schema.cli_json])
 
-        if effective.model is not None:
-            argv.extend(["--model", effective.model])
+        argv.extend(["--model", effective.model])
         if effective.effort is not None:
             argv.extend(["--effort", effective.effort])
 
@@ -479,9 +478,7 @@ class GrokClient:
     def _resolve_options(self, options: GrokRunOptions | None) -> ResolvedGrokRunOptions:
         override = options or GrokRunOptions()
         default = self.default_options
-        model = first_set(override.model, default.model)
-        if model is None:
-            model = self.default_model
+        model = first_set_or(override.model, default.model, default=self.default_model)
         effort = first_set(override.effort, default.effort)
         if effort is None:
             effort = self.default_effort
