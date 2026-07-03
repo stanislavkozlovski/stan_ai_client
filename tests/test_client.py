@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from stan_ai_client import (
+    AIClientTimeoutError,
     ClaudeCodeClient,
     CommandMetadata,
     ClaudeExecutableNotFoundError,
@@ -17,12 +18,31 @@ from stan_ai_client import (
     ClaudeRateLimitError,
     ClaudeStructuredOutputMissingError,
     ClaudeStructuredOutputValidationError,
+    ClaudeTimeoutError,
     RateLimitInfo,
     RateLimitRetryPolicy,
     RunOptions,
     StructuredRunResult,
     StructuredSchema,
 )
+
+
+def test_client_module_reexports_legacy_symbols() -> None:
+    from stan_ai_client.client import (  # noqa: PLC0415
+        ClaudeProcessError as ClientModuleClaudeProcessError,
+        JsonRunResult as ClientModuleJsonRunResult,
+        RateLimitRetryPolicy as ClientModuleRateLimitRetryPolicy,
+        RunOptions as ClientModuleRunOptions,
+        StructuredSchema as ClientModuleStructuredSchema,
+        TextRunResult as ClientModuleTextRunResult,
+    )
+
+    assert ClientModuleRunOptions is RunOptions
+    assert ClientModuleJsonRunResult.__name__ == "JsonRunResult"
+    assert ClientModuleTextRunResult.__name__ == "TextRunResult"
+    assert ClientModuleRateLimitRetryPolicy is RateLimitRetryPolicy
+    assert ClientModuleStructuredSchema is StructuredSchema
+    assert ClientModuleClaudeProcessError is ClaudeProcessError
 
 
 class RunRecorder:
@@ -222,7 +242,7 @@ def test_rate_limit_policy_retries_json_after_parsed_wait(
     caplog.set_level(logging.WARNING, logger=logger.name)
     client = ClaudeCodeClient(logger=logger)
     sleeps: list[float] = []
-    monkeypatch.setattr("stan_ai_client.client.time.sleep", sleeps.append)
+    monkeypatch.setattr("stan_ai_client.claude.time.sleep", sleeps.append)
 
     result = client.run_json(
         "hello",
@@ -255,7 +275,7 @@ def test_rate_limit_policy_refuses_json_wait_over_budget(
     caplog.set_level(logging.WARNING, logger=logger.name)
     client = ClaudeCodeClient(logger=logger)
     sleeps: list[float] = []
-    monkeypatch.setattr("stan_ai_client.client.time.sleep", sleeps.append)
+    monkeypatch.setattr("stan_ai_client.claude.time.sleep", sleeps.append)
 
     with pytest.raises(ClaudeRateLimitError) as excinfo:
         client.run_json(
@@ -288,7 +308,7 @@ def test_rate_limit_policy_refuses_json_without_retry_metadata(
     caplog.set_level(logging.WARNING, logger=logger.name)
     client = ClaudeCodeClient(logger=logger)
     sleeps: list[float] = []
-    monkeypatch.setattr("stan_ai_client.client.time.sleep", sleeps.append)
+    monkeypatch.setattr("stan_ai_client.claude.time.sleep", sleeps.append)
 
     with pytest.raises(ClaudeRateLimitError) as excinfo:
         client.run_json(
@@ -310,7 +330,7 @@ def test_rate_limit_policy_refuses_non_positive_retry_wait(
     caplog.set_level(logging.WARNING, logger=logger.name)
     client = ClaudeCodeClient(logger=logger)
     sleeps: list[float] = []
-    monkeypatch.setattr("stan_ai_client.client.time.sleep", sleeps.append)
+    monkeypatch.setattr("stan_ai_client.claude.time.sleep", sleeps.append)
     error = ClaudeRateLimitError(
         "rate limited",
         command=CommandMetadata(argv=("claude",), cwd=None, elapsed_ms=0.0),
@@ -362,7 +382,7 @@ def test_rate_limit_policy_uses_cumulative_wait_budget(
 
     client = ClaudeCodeClient()
     sleeps: list[float] = []
-    monkeypatch.setattr("stan_ai_client.client.time.sleep", sleeps.append)
+    monkeypatch.setattr("stan_ai_client.claude.time.sleep", sleeps.append)
 
     with pytest.raises(ClaudeRateLimitError):
         client.run_json(
@@ -395,7 +415,7 @@ def test_rate_limit_policy_retries_text_mode(monkeypatch: pytest.MonkeyPatch) ->
 
     client = ClaudeCodeClient()
     sleeps: list[float] = []
-    monkeypatch.setattr("stan_ai_client.client.time.sleep", sleeps.append)
+    monkeypatch.setattr("stan_ai_client.claude.time.sleep", sleeps.append)
 
     result = client.run_text(
         "hello",
@@ -428,7 +448,7 @@ def test_rate_limit_policy_retries_structured_mode(monkeypatch: pytest.MonkeyPat
 
     client = ClaudeCodeClient()
     sleeps: list[float] = []
-    monkeypatch.setattr("stan_ai_client.client.time.sleep", sleeps.append)
+    monkeypatch.setattr("stan_ai_client.claude.time.sleep", sleeps.append)
     schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
         {
             "type": "object",
@@ -463,6 +483,10 @@ def test_missing_executable_is_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
     client = ClaudeCodeClient(executable="claude")
     with pytest.raises(ClaudeExecutableNotFoundError):
         client.run_text("hello")
+
+
+def test_claude_timeout_error_uses_provider_neutral_base() -> None:
+    assert issubclass(ClaudeTimeoutError, AIClientTimeoutError)
 
 
 def test_logging_hides_prompt_text_by_default(

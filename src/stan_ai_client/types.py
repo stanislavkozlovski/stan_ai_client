@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Generic, Literal, Mapping, TypeVar
 
 Effort = Literal["low", "medium", "high", "max"]
+ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
 PermissionMode = Literal[
     "acceptEdits",
     "bypassPermissions",
@@ -13,6 +14,7 @@ PermissionMode = Literal[
     "plan",
     "auto",
 ]
+CodexPermissionMode = Literal["default", "bypassPermissions"]
 InputMode = Literal["stdin", "argv"]
 TStructured = TypeVar("TStructured")
 
@@ -40,10 +42,31 @@ class RunOptions:
 
 
 @dataclass(frozen=True)
-class RateLimitRetryPolicy:
-    """Controls opt-in retry behavior for Claude rate-limit responses.
+class CodexRunOptions:
+    cwd: str | Path | None = None
+    model: str | None = None
+    reasoning_effort: ReasoningEffort | None = None
+    timeout_seconds: float | None = None
+    input_mode: InputMode | None = None
+    permission_mode: CodexPermissionMode | None = None
+    session_id: str | None = None
+    continue_last_session: bool | None = None
+    skip_git_repo_check: bool | None = None
+    ignore_user_config: bool | None = None
+    ignore_rules: bool | None = None
+    add_dirs: tuple[str | Path, ...] | None = None
+    profile: str | None = None
+    config_overrides: tuple[str, ...] | None = None
+    extra_args: tuple[str, ...] | None = None
+    resume_extra_args: tuple[str, ...] | None = None
+    env: Mapping[str, str] | None = None
 
-    Claude rate limits usually reset on a concrete schedule, so the policy is
+
+@dataclass(frozen=True)
+class RateLimitRetryPolicy:
+    """Controls opt-in retry behavior for parseable rate-limit responses.
+
+    Local AI CLIs often expose reset metadata in error text, so the policy is
     budget-based: callers decide how long an operation may wait.
     """
 
@@ -132,6 +155,21 @@ class ClaudeJsonPayload:
 
 
 @dataclass(frozen=True)
+class CodexJsonPayload:
+    thread_id: str | None
+    result: str | None
+    usage: dict[str, Any]
+    events: tuple[dict[str, Any], ...]
+    error: dict[str, Any] | None
+    structured_output: Any | None
+    _structured_output_present: bool = field(default=False, repr=False)
+
+    @property
+    def has_structured_output(self) -> bool:
+        return self._structured_output_present
+
+
+@dataclass(frozen=True)
 class TextRunResult:
     command: CommandMetadata
     stdout: str
@@ -156,4 +194,23 @@ class StructuredRunResult(Generic[TStructured]):
     stderr: str
     returncode: int
     payload: ClaudeJsonPayload
+    structured_output: TStructured
+
+
+@dataclass(frozen=True)
+class CodexJsonRunResult:
+    command: CommandMetadata
+    stdout: str
+    stderr: str
+    returncode: int
+    payload: CodexJsonPayload
+
+
+@dataclass(frozen=True)
+class CodexStructuredRunResult(Generic[TStructured]):
+    command: CommandMetadata
+    stdout: str
+    stderr: str
+    returncode: int
+    payload: CodexJsonPayload
     structured_output: TStructured

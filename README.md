@@ -1,13 +1,16 @@
 # stan_ai_client
 
-`stan_ai_client` is a thin Python wrapper around the local `claude` executable.
+`stan_ai_client` is a thin Python wrapper around local AI coding CLIs.
 
-It does not call Anthropic APIs directly. Claude Code must already be installed and authenticated on the machine.
+It supports Claude Code through the local `claude` executable and Codex through
+the local `codex exec` executable. It does not call Anthropic or OpenAI APIs
+directly; the relevant CLI must already be installed and authenticated on the
+machine.
 
 The library is intentionally small and pragmatic:
 
-- `run_text()` for plain-text Claude output
-- `run_json()` for `--output-format json`
+- `run_text()` for plain-text output
+- `run_json()` for Claude JSON envelopes or Codex JSONL events
 - `run_structured()` for schema-validated structured output
 - typed results
 - structured exceptions
@@ -20,21 +23,22 @@ The library is intentionally small and pragmatic:
 
 Use `stan_ai_client` when you want:
 
-- a small Python API on top of Claude Code
+- a small Python API on top of Claude Code or Codex
 - text mode and JSON mode without hand-rolling subprocess logic
 - strongly guided structured output with local validation
 - command metadata, typed JSON payloads, and normalized exceptions
 - safe-by-default prompt logging behavior
-- local automation that already depends on Claude Code being installed
+- local automation that already depends on Claude Code or Codex being installed
 
 Typical use cases:
 
 - article summarization
 - tagging or YAML generation
 - one-shot repository or directory analysis
-- local scripts that need Claude session metadata, cost, or duration
+- local scripts that need session metadata, usage, cost, or duration
 
-It is not a replacement for the Anthropic API SDK, and it is not trying to abstract multiple providers.
+It is not a replacement for the Anthropic SDK, the OpenAI SDK, or the Codex SDK.
+It intentionally stays at the local process-wrapper layer.
 
 ## Install
 
@@ -68,25 +72,27 @@ pip install "git+https://github.com/<your-user>/stan_ai_client.git"
 
 ## Quickstart
 
-### 1. Install Claude Code
+### 1. Install Claude Code or Codex
 
-Make sure `claude` is already available on your machine and authenticated:
+Make sure the CLI you want is already available on your machine and authenticated:
 
 ```bash
 claude --version
+codex --version
 ```
 
 ### 2. Run the smoke test
 
 ```bash
 python examples/smoke_test.py
+python examples/codex_smoke_test.py
 ```
 
-That runs one text-mode call and one JSON-mode call.
+Those run text-mode and JSON-mode calls against the selected local CLI.
 
 ## Minimal Usage
 
-### Text mode
+### Claude text mode
 
 ```python
 from stan_ai_client import ClaudeCodeClient
@@ -96,7 +102,7 @@ result = client.run_text("Reply with the single word: ok")
 print(result.text)
 ```
 
-### JSON mode
+### Claude JSON mode
 
 ```python
 from pathlib import Path
@@ -122,7 +128,7 @@ print(result.payload.total_cost_usd)
 print(result.payload.session_id)
 ```
 
-### Structured mode
+### Claude structured mode
 
 ```python
 from stan_ai_client import ClaudeCodeClient, StructuredSchema
@@ -152,6 +158,69 @@ print(result.payload.total_cost_usd)
 ```
 
 `run_structured()` validates the schema before Claude runs, requires `structured_output` in the response, and validates the returned object locally against the same schema.
+
+### Codex text mode
+
+```python
+from stan_ai_client import CodexClient
+
+client = CodexClient()
+result = client.run_text("Reply with the single word: ok")
+print(result.text)
+```
+
+`CodexClient` targets `codex exec`. By default it passes
+`--dangerously-bypass-approvals-and-sandbox`, matching the current automation
+preference for this package. Use `CodexRunOptions(permission_mode="default")`
+to omit that flag and let Codex use its configured defaults.
+
+### Codex JSONL mode
+
+```python
+from stan_ai_client import CodexClient
+
+client = CodexClient()
+result = client.run_json("Summarize this repository.")
+
+print(result.payload.result)
+print(result.payload.thread_id)
+print(result.payload.usage)
+```
+
+Codex JSON mode uses `codex exec --json`, so the payload represents parsed JSONL
+events instead of a Claude-style one-object envelope.
+
+### Codex structured mode
+
+```python
+from stan_ai_client import CodexClient, StructuredSchema
+
+client = CodexClient()
+schema = StructuredSchema.from_dict(
+    {
+        "type": "object",
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"],
+        "additionalProperties": False,
+    }
+)
+
+result = client.run_structured("Summarize this repository.", schema=schema)
+print(result.structured_output["summary"])
+```
+
+Codex structured mode writes the validated schema to a temporary JSON file,
+passes it with `--output-schema`, parses the final response as JSON, and
+validates the returned object locally.
+
+Codex additionally validates schemas against the OpenAI structured-output
+subset before invoking the CLI. The root schema must be an object, every object
+property must be required, and objects must set `additionalProperties: false`.
+Unsupported schema keywords such as `allOf`, `oneOf`, `not`,
+`dependentRequired`, `dependentSchemas`, `if`, `then`, and `else` are rejected
+locally.
+Structured Codex runs may also resume existing sessions with `session_id` or
+`continue_last_session`.
 
 ### Logging
 
@@ -212,23 +281,41 @@ Top-level exports:
 from stan_ai_client import (
     __version__,
     ClaudeCodeClient,
+    CodexClient,
     RunOptions,
+    CodexRunOptions,
     TextRunResult,
     JsonRunResult,
     StructuredRunResult,
+    CodexJsonRunResult,
+    CodexStructuredRunResult,
     ClaudeJsonPayload,
+    CodexJsonPayload,
     CommandMetadata,
     StructuredSchema,
+    AIClientError,
+    AIClientTimeoutError,
     ClaudeCodeError,
+    CodexCodeError,
     ClaudeExecutableNotFoundError,
+    CodexExecutableNotFoundError,
     ClaudeLimitError,
+    CodexLimitError,
     ClaudeTimeoutError,
+    CodexTimeoutError,
     ClaudeProcessError,
+    CodexProcessError,
     ClaudeProtocolError,
+    CodexProtocolError,
     ClaudeRateLimitError,
+    CodexRateLimitError,
+    StructuredSchemaValidationError,
     ClaudeSchemaValidationError,
+    CodexSchemaValidationError,
     ClaudeStructuredOutputMissingError,
+    CodexStructuredOutputMissingError,
     ClaudeStructuredOutputValidationError,
+    CodexStructuredOutputValidationError,
     RateLimitRetryPolicy,
     RateLimitInfo,
     parse_rate_limit_info,
@@ -243,17 +330,20 @@ from stan_ai_client import (
 - prompts sent over stdin by default
 - optional argv prompt mode
 - per-call working directory control
-- model, effort, timeout, environment, and session controls
+- model, effort/reasoning-effort, timeout, environment, and session controls
 - support for Claude CLI flags via typed `RunOptions`
+- support for Codex CLI flags via typed `CodexRunOptions`
 - raw stdout and stderr preserved on results and errors
 - opt-in stdlib logging with safe default prompt handling
 - typed JSON payload parsing with unknown fields preserved in `extras`
+- typed Codex JSONL payload parsing with raw events preserved
 - local input and output validation for structured mode
 - rate-limit detection, reset-time parsing, and opt-in retry policy
 
 ## Examples
 
 - [examples/smoke_test.py](./examples/smoke_test.py)
+- [examples/codex_smoke_test.py](./examples/codex_smoke_test.py)
 - [examples/summarize_article.py](./examples/summarize_article.py)
 - [examples/tag_article.py](./examples/tag_article.py)
 - [examples/logging_demo.py](./examples/logging_demo.py)
@@ -277,9 +367,12 @@ See [DOCS.md](./DOCS.md) for:
 ## Notes
 
 - prompts default to stdin instead of argv
-- JSON mode always requests `--output-format json`
-- structured mode always requests `--output-format json` and `--json-schema`
-- text mode always requests `--output-format text`
+- Claude JSON mode always requests `--output-format json`
+- Claude structured mode always requests `--output-format json` and `--json-schema`
+- Claude text mode always requests `--output-format text`
+- Codex JSON mode uses `codex exec --json`
+- Codex structured mode uses `codex exec --output-schema <tempfile>`
+- Codex defaults to `--dangerously-bypass-approvals-and-sandbox`
 - logging uses stdlib `logging`
 - prompts are not written to logs unless `log_prompts=True`
 - the library is sync-only in `0.1.x`
@@ -292,9 +385,14 @@ See [DOCS.md](./DOCS.md) for:
 - no background scheduler or persistent job queue
 - no standalone CLI wrapper command
 - no first-class typed wrapper yet for every Claude Code flag
-- structured mode accepts dict-backed JSON Schema objects only
+- no first-class typed wrapper yet for every Codex flag
+- shared structured mode accepts dict-backed JSON Schema objects only
+- Codex structured mode additionally enforces the OpenAI structured-output
+  subset
 
-For unsupported Claude Code flags, use `RunOptions(extra_args=...)`.
+For unsupported Claude Code flags, use `RunOptions(extra_args=...)`. For
+unsupported Codex exec flags, use `CodexRunOptions(extra_args=...)`; for
+unsupported Codex resume flags, use `CodexRunOptions(resume_extra_args=...)`.
 
 ## Development
 
