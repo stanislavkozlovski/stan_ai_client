@@ -16,7 +16,7 @@ from stan_ai_client import (
     CodexProtocolError,
     CodexRateLimitError,
     CodexRunOptions,
-    CodexStructuredRunResult,
+    CodexSchemaValidationError,
     CodexStructuredOutputMissingError,
     CodexStructuredOutputValidationError,
     CodexTimeoutError,
@@ -214,6 +214,30 @@ def test_codex_run_text_can_continue_last_session(monkeypatch: pytest.MonkeyPatc
     assert argv[-1] == "-"
 
 
+def test_codex_run_text_puts_resume_extra_args_after_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="done\n", stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    client = CodexClient()
+    client.run_text(
+        "continue",
+        options=CodexRunOptions(
+            continue_last_session=True,
+            extra_args=("--all",),
+        ),
+    )
+
+    argv = recorder.calls[0]["argv"]
+    resume_index = argv.index("resume")
+    assert argv.index("--all") > resume_index
+    assert argv.index("--all") < argv.index("--last")
+    assert argv[-1] == "-"
+
+
 def test_codex_run_json_parses_jsonl_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     stdout = "\n".join(
         [
@@ -241,6 +265,19 @@ def test_codex_run_json_raises_protocol_error_on_non_jsonl(
 ) -> None:
     recorder = RunRecorder(
         subprocess.CompletedProcess(args=[], returncode=0, stdout="plain text", stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    client = CodexClient()
+    with pytest.raises(CodexProtocolError):
+        client.run_json("hello")
+
+
+def test_codex_run_json_raises_protocol_error_on_non_event_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout='{"summary":"brief"}', stderr="")
     )
     monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
 
@@ -380,7 +417,7 @@ def test_codex_run_structured_passes_schema_file_and_validates_output(
     assert not Path(recorder.schema_paths[0]).exists()
 
 
-def test_codex_run_structured_accepts_null_when_schema_allows_it(
+def test_codex_run_structured_rejects_non_object_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     recorder = RunRecorder(
@@ -389,25 +426,37 @@ def test_codex_run_structured_accepts_null_when_schema_allows_it(
     monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
 
     client = CodexClient()
-    result: CodexStructuredRunResult[None] = client.run_structured(
-        "return null",
-        schema=StructuredSchema.from_dict({"type": "null"}),
-    )
+    with pytest.raises(CodexSchemaValidationError, match="root object"):
+        client.run_structured("return null", schema=StructuredSchema.from_dict({"type": "null"}))
 
-    assert result.structured_output is None
-    assert result.payload.has_structured_output is True
+    assert recorder.calls == []
 
 
 @pytest.mark.parametrize(
-    "options",
+    "schema_dict, message",
     [
-        CodexRunOptions(session_id="thread-1"),
-        CodexRunOptions(continue_last_session=True),
+        (
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "additionalProperties": False,
+            },
+            "required",
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+            },
+            "additionalProperties",
+        ),
     ],
 )
-def test_codex_run_structured_rejects_resume_options(
+def test_codex_run_structured_rejects_unsupported_schema_subset(
     monkeypatch: pytest.MonkeyPatch,
-    options: CodexRunOptions,
+    schema_dict: dict[str, object],
+    message: str,
 ) -> None:
     recorder = RunRecorder(
         subprocess.CompletedProcess(args=[], returncode=0, stdout='{"summary":"brief"}', stderr="")
@@ -415,11 +464,45 @@ def test_codex_run_structured_rejects_resume_options(
     monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
 
     client = CodexClient()
-    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict({"type": "object"})
-    with pytest.raises(ValueError, match="structured mode does not support session resume"):
-        client.run_structured("hello", schema=schema, options=options)
+    with pytest.raises(CodexSchemaValidationError, match=message):
+        client.run_structured("hello", schema=StructuredSchema.from_dict(schema_dict))
 
     assert recorder.calls == []
+
+@pytest.mark.parametrize(
+    "options, expected_resume_arg",
+    [
+        (CodexRunOptions(session_id="thread-1"), "thread-1"),
+        (CodexRunOptions(continue_last_session=True), "--last"),
+    ],
+)
+def test_codex_run_structured_allows_resume_options(
+    monkeypatch: pytest.MonkeyPatch,
+    options: CodexRunOptions,
+    expected_resume_arg: str,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout='{"summary":"brief"}', stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    client = CodexClient()
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+            "additionalProperties": False,
+        }
+    )
+    result = client.run_structured("hello", schema=schema, options=options)
+
+    argv = recorder.calls[0]["argv"]
+    resume_index = argv.index("resume")
+    assert result.structured_output == {"summary": "brief"}
+    assert "--output-schema" in argv
+    assert argv.index("--output-schema") < resume_index
+    assert argv[resume_index + 1] == expected_resume_arg
 
 
 def test_codex_run_structured_raises_when_output_is_empty(
@@ -432,7 +515,17 @@ def test_codex_run_structured_raises_when_output_is_empty(
 
     client = CodexClient()
     with pytest.raises(CodexStructuredOutputMissingError) as excinfo:
-        client.run_structured("hello", schema=StructuredSchema.from_dict({"type": "object"}))
+        client.run_structured(
+            "hello",
+            schema=StructuredSchema.from_dict(
+                {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": False,
+                }
+            ),
+        )
 
     assert excinfo.value.payload.has_structured_output is False
 

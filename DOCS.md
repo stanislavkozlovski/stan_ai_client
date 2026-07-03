@@ -353,9 +353,13 @@ Structured mode writes the schema to a temporary file, runs
 `codex exec --output-schema <file>`, parses stdout as JSON, validates the result,
 and deletes the temporary schema file.
 
-Codex structured mode does not support `session_id` or
-`continue_last_session`, because `codex exec resume` does not accept
-`--output-schema`.
+Codex schemas are additionally checked against the OpenAI structured-output
+subset before the temporary file is created. The root schema must be an object,
+object properties must all be listed in `required`, and objects must set
+`additionalProperties: false`.
+
+Codex structured mode supports `session_id` and `continue_last_session`;
+`--output-schema` is passed to `codex exec` before the `resume` subcommand.
 
 ## Result Types
 
@@ -585,7 +589,9 @@ ruff check .
 - no standalone CLI wrapper command
 - no direct Anthropic or OpenAI API calls
 - no first-class typed wrapper yet for every Claude Code or Codex flag
-- structured mode accepts dict-backed JSON Schema only
+- shared `StructuredSchema` accepts dict-backed JSON Schema objects only
+- Codex structured mode additionally enforces the OpenAI structured-output
+  subset
 
 For unsupported Claude flags, use `RunOptions(extra_args=...)`. For unsupported
 Codex flags, use `CodexRunOptions(extra_args=...)`.

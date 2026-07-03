@@ -213,6 +213,12 @@ Codex structured mode writes the validated schema to a temporary JSON file,
 passes it with `--output-schema`, parses the final response as JSON, and
 validates the returned object locally.
 
+Codex additionally validates schemas against the OpenAI structured-output
+subset before invoking the CLI. The root schema must be an object, every object
+property must be required, and objects must set `additionalProperties: false`.
+Structured Codex runs may also resume existing sessions with `session_id` or
+`continue_last_session`.
+
 ### Logging
 
 ```python
@@ -377,7 +383,9 @@ See [DOCS.md](./DOCS.md) for:
 - no standalone CLI wrapper command
 - no first-class typed wrapper yet for every Claude Code flag
 - no first-class typed wrapper yet for every Codex flag
-- structured mode accepts dict-backed JSON Schema objects only
+- shared structured mode accepts dict-backed JSON Schema objects only
+- Codex structured mode additionally enforces the OpenAI structured-output
+  subset
 
 For unsupported Claude Code flags, use `RunOptions(extra_args=...)`. For
 unsupported Codex flags, use `CodexRunOptions(extra_args=...)`.

@@ -54,5 +54,14 @@ def test_parse_codex_jsonl_payload_skips_blank_lines() -> None:
     assert len(payload.events) == 2
 
 
+def test_parse_codex_jsonl_payload_rejects_non_event_object() -> None:
+    try:
+        parse_codex_jsonl_payload('{"summary":"brief"}')
+    except ValueError as exc:
+        assert "string type" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected non-event JSON object to be rejected")
+
+
 def test_try_parse_codex_jsonl_payload_returns_none_for_invalid_jsonl() -> None:
     assert try_parse_codex_jsonl_payload("not json") is None

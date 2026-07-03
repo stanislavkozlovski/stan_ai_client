@@ -24,9 +24,11 @@ def parse_codex_jsonl_payload(text: str) -> CodexJsonPayload:
         if not isinstance(parsed, dict):
             raise ValueError("expected each Codex JSONL line to be a JSON object")
 
-        events.append(parsed)
         event_type = parsed.get("type")
+        if not isinstance(event_type, str):
+            raise ValueError("expected each Codex JSONL event to have a string type")
 
+        events.append(parsed)
         if event_type == "thread.started":
             raw_thread_id = parsed.get("thread_id")
             if isinstance(raw_thread_id, str):

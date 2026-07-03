@@ -365,13 +365,17 @@ Implementation detail:
 5. Validate the parsed object locally with the same `StructuredSchema`.
 6. Return `CodexStructuredRunResult(payload=CodexJsonPayload(...), structured_output=...)`.
 
+Codex structured mode also validates schemas against the OpenAI structured-
+output subset before the temporary file is created. The root schema must be an
+object, each object property must be required, and object schemas must use
+`additionalProperties: false`.
+
 If `--json` and `--output-schema` are used together, prefer parsing JSONL events
 and extracting the final agent message as JSON only after testing the exact CLI
 behavior. Start without combining them.
 
-Do not combine `--output-schema` with `codex exec resume`; resumed structured
-mode should fail fast because the Codex resume subcommand does not support
-schema-constrained output.
+`--output-schema` may be combined with `codex exec resume`; current Codex CLI
+help exposes the schema flag for resumed exec runs.
 
 ## Implementation Plan
 
@@ -439,6 +443,9 @@ Required tests:
 - Codex JSON mode surfaces `thread_id`, final message, usage, and raw events.
 - Codex structured mode writes schema to a temp file and passes
   `--output-schema`.
+- Codex structured mode supports resume by id and continue-last-session.
+- Codex structured mode validates schemas against the supported OpenAI
+  structured-output subset before invoking the CLI.
 - Codex structured mode validates the final object locally.
 - Codex logs redact schema paths or contents where appropriate.
 - Provider-neutral exceptions catch both Claude and Codex failures.

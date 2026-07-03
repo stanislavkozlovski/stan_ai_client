@@ -24,6 +24,7 @@ from .exceptions import (
     CodexProcessError,
     CodexProtocolError,
     CodexRateLimitError,
+    CodexSchemaValidationError,
     CodexStructuredOutputMissingError,
     CodexStructuredOutputValidationError,
     CodexTimeoutError,
@@ -231,10 +232,6 @@ class CodexClient:
         schema: StructuredSchema[TStructured],
         options: CodexRunOptions | None = None,
     ) -> CodexStructuredRunResult[TStructured]:
-        effective = self._resolve_options(options)
-        if effective.session_id is not None or effective.continue_last_session:
-            raise ValueError("Codex structured mode does not support session resume")
-
         schema_path = self._write_schema_file(schema)
         try:
             return self._run_structured_with_schema_file(
@@ -377,6 +374,10 @@ class CodexClient:
 
         if is_resume:
             argv.append("resume")
+            if effective.extra_args is not None:
+                argv.extend(effective.extra_args)
+        elif effective.extra_args is not None:
+            argv.extend(effective.extra_args)
 
         if effective.continue_last_session:
             argv.append("--last")
@@ -439,8 +440,6 @@ class CodexClient:
         if effective.add_dirs is not None:
             for directory in effective.add_dirs:
                 argv.extend(["--add-dir", str(directory)])
-        if effective.extra_args is not None:
-            argv.extend(effective.extra_args)
 
     def _execute(
         self, prepared: PreparedCommand
@@ -664,6 +663,7 @@ class CodexClient:
         )
 
     def _write_schema_file(self, schema: StructuredSchema[Any]) -> str:
+        _validate_codex_output_schema(schema)
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
@@ -715,3 +715,103 @@ def _resume_session_arg_index(argv: tuple[str, ...]) -> int | None:
     if argv[session_index] == "-":
         return None
     return session_index
+
+
+def _validate_codex_output_schema(schema: StructuredSchema[Any]) -> None:
+    errors = list(
+        _iter_codex_output_schema_errors(
+            schema.schema,
+            path="$",
+            require_root_object=True,
+        )
+    )
+    if errors:
+        detail = "; ".join(errors)
+        raise CodexSchemaValidationError(
+            f"Codex structured output schema is not supported: {detail}"
+        )
+
+
+def _iter_codex_output_schema_errors(
+    node: object,
+    *,
+    path: str,
+    require_root_object: bool = False,
+) -> list[str]:
+    if not isinstance(node, dict):
+        return []
+
+    errors: list[str] = []
+    schema_type = node.get("type")
+    if require_root_object and schema_type != "object":
+        errors.append(f"{path} must be a root object schema")
+
+    is_object_schema = (
+        schema_type == "object"
+        or (isinstance(schema_type, list) and "object" in schema_type)
+        or "properties" in node
+    )
+    if is_object_schema:
+        properties = node.get("properties", {})
+        if not isinstance(properties, dict):
+            errors.append(f"{path}.properties must be an object")
+            properties = {}
+
+        required = node.get("required")
+        if not isinstance(required, list) or not all(
+            isinstance(name, str) for name in required
+        ):
+            errors.append(f"{path}.required must list every property")
+            required_names: set[str] = set()
+        else:
+            required_names = set(required)
+
+        property_names = set(properties)
+        missing = sorted(property_names - required_names)
+        extra = sorted(required_names - property_names)
+        if missing:
+            errors.append(
+                f"{path}.required must include every property: {', '.join(missing)}"
+            )
+        if extra:
+            errors.append(
+                f"{path}.required contains undefined properties: {', '.join(extra)}"
+            )
+        if node.get("additionalProperties") is not False:
+            errors.append(f"{path}.additionalProperties must be false")
+
+    errors.extend(_iter_schema_mapping_errors(node.get("properties"), f"{path}.properties"))
+    errors.extend(_iter_schema_mapping_errors(node.get("$defs"), f"{path}.$defs"))
+    errors.extend(_iter_schema_mapping_errors(node.get("definitions"), f"{path}.definitions"))
+
+    items = node.get("items")
+    if isinstance(items, dict):
+        errors.extend(_iter_codex_output_schema_errors(items, path=f"{path}.items"))
+    elif isinstance(items, list):
+        for index, item in enumerate(items):
+            errors.extend(
+                _iter_codex_output_schema_errors(item, path=f"{path}.items[{index}]")
+            )
+
+    for keyword in ("anyOf", "oneOf", "allOf"):
+        value = node.get(keyword)
+        if isinstance(value, list):
+            for index, item in enumerate(value):
+                errors.extend(
+                    _iter_codex_output_schema_errors(
+                        item,
+                        path=f"{path}.{keyword}[{index}]",
+                    )
+                )
+
+    return errors
+
+
+def _iter_schema_mapping_errors(value: object, path: str) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+
+    errors: list[str] = []
+    for key, child in value.items():
+        errors.extend(_iter_codex_output_schema_errors(child, path=f"{path}.{key}"))
+    return errors
