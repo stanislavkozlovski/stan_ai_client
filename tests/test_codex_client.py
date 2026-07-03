@@ -129,7 +129,7 @@ def test_codex_run_text_can_omit_bypass_and_use_argv_prompt(
     argv = recorder.calls[0]["argv"]
     assert "--dangerously-bypass-approvals-and-sandbox" not in argv
     assert recorder.calls[0]["cwd"] == "/tmp/article"
-    assert recorder.calls[0]["input"] is None
+    assert recorder.calls[0]["input"] == ""
     assert argv[-1] == "tag this"
     assert argv[argv.index("--cd") + 1] == "/tmp/article"
     assert argv[argv.index("--profile") + 1] == "ci"
@@ -149,7 +149,7 @@ def test_codex_run_text_uses_default_input_mode(monkeypatch: pytest.MonkeyPatch)
     client = CodexClient(default_options=CodexRunOptions(input_mode="argv"))
     client.run_text("tag this")
 
-    assert recorder.calls[0]["input"] is None
+    assert recorder.calls[0]["input"] == ""
     assert recorder.calls[0]["argv"][-1] == "tag this"
 
 
@@ -398,6 +398,30 @@ def test_codex_run_structured_accepts_null_when_schema_allows_it(
     assert result.payload.has_structured_output is True
 
 
+@pytest.mark.parametrize(
+    "options",
+    [
+        CodexRunOptions(session_id="thread-1"),
+        CodexRunOptions(continue_last_session=True),
+    ],
+)
+def test_codex_run_structured_rejects_resume_options(
+    monkeypatch: pytest.MonkeyPatch,
+    options: CodexRunOptions,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout='{"summary":"brief"}', stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    client = CodexClient()
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict({"type": "object"})
+    with pytest.raises(ValueError, match="structured mode does not support session resume"):
+        client.run_structured("hello", schema=schema, options=options)
+
+    assert recorder.calls == []
+
+
 def test_codex_run_structured_raises_when_output_is_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -454,6 +478,21 @@ def test_codex_missing_executable_is_wrapped(monkeypatch: pytest.MonkeyPatch) ->
         client.run_text("hello")
 
     assert isinstance(excinfo.value, ExecutableNotFoundError)
+
+
+def test_codex_missing_cwd_is_process_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def raise_missing_cwd(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError(2, "No such file or directory", kwargs["cwd"])
+
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", raise_missing_cwd)
+
+    client = CodexClient()
+    with pytest.raises(CodexProcessError) as excinfo:
+        client.run_text("hello", options=CodexRunOptions(cwd="/tmp/missing-workspace"))
+
+    assert "working directory not found" in str(excinfo.value)
+    assert excinfo.value.command.cwd == "/tmp/missing-workspace"
+    assert excinfo.value.returncode == 127
 
 
 def test_codex_timeout_error_uses_provider_neutral_base() -> None:

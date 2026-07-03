@@ -228,6 +228,10 @@ class CodexClient:
         schema: StructuredSchema[TStructured],
         options: CodexRunOptions | None = None,
     ) -> CodexStructuredRunResult[TStructured]:
+        effective = self._resolve_options(options)
+        if effective.session_id is not None or effective.continue_last_session:
+            raise ValueError("Codex structured mode does not support session resume")
+
         schema_path = self._write_schema_file(schema)
         try:
             return self._run_structured_with_schema_file(
@@ -440,6 +444,7 @@ class CodexClient:
             input_text = prompt
         else:
             argv.append(prompt)
+            input_text = ""
 
         merged_env = os.environ.copy()
         if effective.env is not None:
@@ -499,6 +504,22 @@ class CodexClient:
         try:
             completed = execute_command(prepared)
         except FileNotFoundError as exc:
+            if prepared.cwd is not None and exc.filename == prepared.cwd:
+                metadata = CommandMetadata(
+                    argv=prepared.argv,
+                    cwd=prepared.cwd,
+                    elapsed_ms=(time.monotonic() - started_at) * 1000,
+                )
+                self.logger.error("Codex working directory not found cwd=%s", prepared.cwd)
+                raise CodexProcessError(
+                    f"Codex working directory not found: {prepared.cwd}",
+                    command=metadata,
+                    returncode=127,
+                    stdout="",
+                    stderr="",
+                    payload=None,
+                ) from exc
+
             self.logger.error("Codex executable not found executable=%s", self.executable)
             raise CodexExecutableNotFoundError(self.executable) from exc
         except TimeoutExpired as exc:
@@ -511,7 +532,7 @@ class CodexClient:
                 "Codex run timed out timeout_seconds=%.1f cwd=%s argv=%s elapsed_ms=%.0f",
                 prepared.timeout_seconds,
                 prepared.cwd,
-                _redact_argv(prepared.argv, prompt_in_argv=prepared.input_text is None),
+                _redact_argv(prepared.argv, prompt_in_argv=_prompt_in_argv(prepared)),
                 metadata.elapsed_ms,
             )
             raise CodexTimeoutError(metadata, prepared.timeout_seconds) from exc
@@ -690,7 +711,7 @@ class CodexClient:
         )
         self.logger.debug(
             "Codex argv=%s",
-            _redact_argv(prepared.argv, prompt_in_argv=prepared.input_text is None),
+            _redact_argv(prepared.argv, prompt_in_argv=effective.input_mode == "argv"),
         )
         if self.log_prompts:
             self.logger.debug("Codex prompt=%s", prompt)
@@ -788,6 +809,10 @@ def _redact_argv(argv: tuple[str, ...], *, prompt_in_argv: bool) -> tuple[str, .
 
 def _payload_has_event_type(payload: CodexJsonPayload, event_type: str) -> bool:
     return any(event.get("type") == event_type for event in payload.events)
+
+
+def _prompt_in_argv(prepared: PreparedCommand) -> bool:
+    return bool(prepared.argv) and prepared.argv[-1] != "-"
 
 
 def _resume_session_arg_index(argv: tuple[str, ...]) -> int | None:

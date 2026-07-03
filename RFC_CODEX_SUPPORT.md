@@ -350,6 +350,10 @@ If `--json` and `--output-schema` are used together, prefer parsing JSONL events
 and extracting the final agent message as JSON only after testing the exact CLI
 behavior. Start without combining them.
 
+Do not combine `--output-schema` with `codex exec resume`; resumed structured
+mode should fail fast because the Codex resume subcommand does not support
+schema-constrained output.
+
 ## Implementation Plan
 
 ### Phase 1: Compatibility Refactor

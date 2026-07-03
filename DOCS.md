@@ -353,6 +353,10 @@ Structured mode writes the schema to a temporary file, runs
 `codex exec --output-schema <file>`, parses stdout as JSON, validates the result,
 and deletes the temporary schema file.
 
+Codex structured mode does not support `session_id` or
+`continue_last_session`, because `codex exec resume` does not accept
+`--output-schema`.
+
 ## Result Types
 
 ### `TextRunResult`
@@ -538,6 +542,7 @@ Codex:
 - structured mode adds `--output-schema <tempfile>`
 - stdin mode sends the prompt through stdin with `codex exec -`
 - argv mode appends the prompt directly to argv
+- argv mode sends empty stdin so inherited piped input is not added as context
 - `bypassPermissions` adds `--dangerously-bypass-approvals-and-sandbox`
 
 Both clients copy `os.environ`, merge `options.env`, preserve raw stdout/stderr
