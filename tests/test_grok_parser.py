@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+import json
+
+from stan_ai_client.grok_parser import (
+    parse_grok_json_payload,
+    raw_grok_structured_payload,
+    summarize_grok_error_text,
+    try_parse_grok_json_payload,
+)
+from stan_ai_client.types import GrokJsonPayload
+
+
+def test_parse_success() -> None:
+    text = '{"text": "hello", "stopReason": "EndTurn", "sessionId": "abc", "requestId": "req1"}'
+    payload = parse_grok_json_payload(text)
+    assert isinstance(payload, GrokJsonPayload)
+    assert payload.text == "hello"
+    assert payload.stop_reason == "EndTurn"
+    assert payload.session_id == "abc"
+    assert payload.has_structured_output is False
+
+
+def test_parse_structured() -> None:
+    text = '{"text": "{\\"x\\":1}", "stopReason": "EndTurn", "structuredOutput": {"x": 1}}'
+    payload = parse_grok_json_payload(text)
+    assert payload.has_structured_output is True
+    assert payload.structured_output == {"x": 1}
+
+
+def test_raw_structured_payload() -> None:
+    payload = raw_grok_structured_payload(json.loads('{"x": 1}'))
+    assert payload.has_structured_output is True
+    assert payload.structured_output == {"x": 1}
+    assert payload.extras == {}
+
+
+def test_raw_structured_payload_preserves_structured_output_key() -> None:
+    payload = raw_grok_structured_payload(json.loads('{"structuredOutput": "ok"}'))
+    assert payload.has_structured_output is True
+    assert payload.structured_output == {"structuredOutput": "ok"}
+
+
+def test_raw_structured_payload_preserves_envelope_like_keys() -> None:
+    payload = raw_grok_structured_payload(json.loads('{"text": "desc", "structuredOutput": "ok"}'))
+    assert payload.has_structured_output is True
+    assert payload.structured_output == {"text": "desc", "structuredOutput": "ok"}
+    assert payload.text is None
+
+
+def test_parse_preserves_falsy_structured_output() -> None:
+    payload = parse_grok_json_payload('{"text": "false", "structuredOutput": false}')
+    assert payload.has_structured_output is True
+    assert payload.structured_output is False
+
+
+def test_parse_error_envelope() -> None:
+    text = '{"type": "error", "message": "boom"}'
+    payload = parse_grok_json_payload(text)
+    assert payload.text is None
+    assert "error" in payload.extras.get("type", "")
+
+
+def test_try_parse_bad_json_returns_none() -> None:
+    assert try_parse_grok_json_payload("not json") is None
+    assert try_parse_grok_json_payload("") is None
+
+
+def test_summarize_error_prefers_text() -> None:
+    payload = GrokJsonPayload(
+        text="result here",
+        stop_reason=None,
+        session_id=None,
+        request_id=None,
+        thought=None,
+        structured_output=None,
+    )
+    assert summarize_grok_error_text(payload=payload, stdout="", stderr="") == "result here"
+
+
+def test_summarize_error_prefers_error_envelope_message() -> None:
+    payload = parse_grok_json_payload('{"type": "error", "message": "boom"}')
+    assert summarize_grok_error_text(payload=payload, stdout="", stderr="") == "boom"
+
+
+def test_summarize_falls_back_to_stderr() -> None:
+    assert "stderr" in summarize_grok_error_text(
+        payload=None, stdout="", stderr="some stderr error"
+    )

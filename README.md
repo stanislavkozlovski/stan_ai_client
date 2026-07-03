@@ -2,10 +2,10 @@
 
 `stan_ai_client` is a thin Python wrapper around local AI coding CLIs.
 
-It supports Claude Code through the local `claude` executable and Codex through
-the local `codex exec` executable. It does not call Anthropic or OpenAI APIs
-directly; the relevant CLI must already be installed and authenticated on the
-machine.
+It supports Claude Code through the local `claude` executable, Codex through
+the local `codex exec` executable, and Grok through the local `grok` executable
+(`grok -p`). It does not call Anthropic, OpenAI, or xAI APIs directly; the
+relevant CLI must already be installed and authenticated on the machine.
 
 The library is intentionally small and pragmatic:
 
@@ -110,7 +110,7 @@ from pathlib import Path
 from stan_ai_client import ClaudeCodeClient, RunOptions
 
 client = ClaudeCodeClient(
-    default_model="claude-opus-4-6",
+    default_model="claude-opus-4-8",
     default_effort="max",
     default_timeout_seconds=180,
 )
@@ -222,6 +222,36 @@ locally.
 Structured Codex runs may also resume existing sessions with `session_id` or
 `continue_last_session`.
 
+### Grok text / JSON / structured
+
+```python
+from stan_ai_client import GrokClient, GrokRunOptions, StructuredSchema
+
+client = GrokClient()  # defaults to model="grok-build"
+
+result = client.run_text("Reply with the single word: ok")
+print(result.text)
+
+# JSON + stable named session
+r = client.run_json("Summarize briefly.", options=GrokRunOptions(session_id="..."))
+print(r.payload.text)
+print(r.payload.session_id)
+
+# Structured
+schema = StructuredSchema.from_dict({"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": False})
+res = client.run_structured("Return {ok: true}", schema=schema)
+print(res.structured_output)
+```
+
+GrokClient drives `grok --no-auto-update -p --output-format ...`. Prompt
+delivery is handled transparently (direct arg or temp `--prompt-file` for long
+prompts). The JSON payload is thinner than Claude's (no cost/usage fields);
+`duration_ms` is provided client-side. Structured mode accepts either Grok's
+envelope `structuredOutput` field or the raw validated JSON value returned by
+newer Grok builds, while Grok `{"type": "error"}` envelopes remain process
+failures. Session support (`session_id`, `continue_last_session`) works well for
+automation.
+
 ### Logging
 
 ```python
@@ -282,8 +312,10 @@ from stan_ai_client import (
     __version__,
     ClaudeCodeClient,
     CodexClient,
+    GrokClient,
     RunOptions,
     CodexRunOptions,
+    GrokRunOptions,
     TextRunResult,
     JsonRunResult,
     StructuredRunResult,
@@ -291,6 +323,10 @@ from stan_ai_client import (
     CodexStructuredRunResult,
     ClaudeJsonPayload,
     CodexJsonPayload,
+    GrokJsonPayload,
+    GrokJsonRunResult,
+    GrokPermissionMode,
+    GrokStructuredRunResult,
     CommandMetadata,
     StructuredSchema,
     AIClientError,
@@ -333,6 +369,7 @@ from stan_ai_client import (
 - model, effort/reasoning-effort, timeout, environment, and session controls
 - support for Claude CLI flags via typed `RunOptions`
 - support for Codex CLI flags via typed `CodexRunOptions`
+- support for Grok CLI flags via typed `GrokRunOptions`
 - raw stdout and stderr preserved on results and errors
 - opt-in stdlib logging with safe default prompt handling
 - typed JSON payload parsing with unknown fields preserved in `extras`
@@ -344,6 +381,7 @@ from stan_ai_client import (
 
 - [examples/smoke_test.py](./examples/smoke_test.py)
 - [examples/codex_smoke_test.py](./examples/codex_smoke_test.py)
+- [examples/grok_smoke_test.py](./examples/grok_smoke_test.py)
 - [examples/summarize_article.py](./examples/summarize_article.py)
 - [examples/tag_article.py](./examples/tag_article.py)
 - [examples/logging_demo.py](./examples/logging_demo.py)
@@ -373,6 +411,7 @@ See [DOCS.md](./DOCS.md) for:
 - Codex JSON mode uses `codex exec --json`
 - Codex structured mode uses `codex exec --output-schema <tempfile>`
 - Codex defaults to `--dangerously-bypass-approvals-and-sandbox`
+- Grok uses `grok -p --output-format plain|json` (prompt via arg or --prompt-file transparently)
 - logging uses stdlib `logging`
 - prompts are not written to logs unless `log_prompts=True`
 - the library is sync-only in `0.1.x`

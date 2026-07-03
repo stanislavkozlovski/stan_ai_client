@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 
 from .rate_limits import RateLimitInfo
-from .types import ClaudeJsonPayload, CodexJsonPayload, CommandMetadata
+from .types import ClaudeJsonPayload, CodexJsonPayload, CommandMetadata, GrokJsonPayload
 
-AIPayload = ClaudeJsonPayload | CodexJsonPayload
+AIPayload = ClaudeJsonPayload | CodexJsonPayload | GrokJsonPayload
 
 
 class AIClientError(RuntimeError):
@@ -193,8 +193,16 @@ class CodexSchemaValidationError(SchemaValidationError, CodexCodeError):
     pass
 
 
+class GrokCodeError(AIClientError):
+    pass
+
+
+class GrokSchemaValidationError(SchemaValidationError, GrokCodeError):
+    pass
+
+
 class StructuredSchemaValidationError(
-    ClaudeSchemaValidationError, CodexSchemaValidationError
+    ClaudeSchemaValidationError, CodexSchemaValidationError, GrokSchemaValidationError
 ):
     pass
 
@@ -244,6 +252,69 @@ class CodexRateLimitError(RateLimitError, CodexLimitError):
         stdout: str,
         stderr: str,
         payload: CodexJsonPayload | None,
+        rate_limit: RateLimitInfo,
+    ) -> None:
+        super().__init__(
+            message,
+            command=command,
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+            payload=payload,
+            limit=rate_limit,
+        )
+
+
+# --- Grok errors (mirror the pattern of Claude/Codex) ---
+
+
+class GrokExecutableNotFoundError(ExecutableNotFoundError, GrokCodeError):
+    def __init__(self, executable: str) -> None:
+        self.executable = executable
+        super().__init__(f"Grok executable not found: {executable}")
+
+
+class GrokTimeoutError(AIClientTimeoutError, GrokCodeError):
+    def __init__(self, command: CommandMetadata, timeout_seconds: float) -> None:
+        self.command = command
+        self.timeout_seconds = timeout_seconds
+        super().__init__(f"Grok command timed out after {timeout_seconds}s")
+
+
+class GrokProcessError(ProcessError, GrokCodeError):
+    payload: GrokJsonPayload | None
+
+
+class GrokProtocolError(ProtocolError, GrokCodeError):
+    pass
+
+
+class GrokStructuredOutputMissingError(
+    StructuredOutputMissingError, GrokProtocolError
+):
+    payload: GrokJsonPayload
+
+
+class GrokStructuredOutputValidationError(
+    StructuredOutputValidationError, GrokProtocolError
+):
+    payload: GrokJsonPayload
+
+
+class GrokLimitError(LimitError, GrokProcessError):
+    pass
+
+
+class GrokRateLimitError(RateLimitError, GrokLimitError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        command: CommandMetadata,
+        returncode: int,
+        stdout: str,
+        stderr: str,
+        payload: GrokJsonPayload | None,
         rate_limit: RateLimitInfo,
     ) -> None:
         super().__init__(

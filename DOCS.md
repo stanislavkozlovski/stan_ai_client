@@ -9,6 +9,7 @@ It supports:
 
 - `ClaudeCodeClient` over the local `claude` executable
 - `CodexClient` over the local `codex exec` command
+- `GrokClient` over the local `grok -p` headless mode
 
 It is designed for scriptable local CLI usage where:
 
@@ -45,6 +46,7 @@ Verify the CLI you want is available:
 ```bash
 claude --version
 codex --version
+grok --version
 ```
 
 ## Versioning And Releases
@@ -74,7 +76,7 @@ class ClaudeCodeClient:
         self,
         *,
         executable: str = "claude",
-        default_model: str = "claude-opus-4-6",
+        default_model: str = "claude-opus-4-8",
         default_effort: Literal["low", "medium", "high", "max"] = "max",
         default_timeout_seconds: float = 120.0,
         default_options: RunOptions | None = None,
@@ -147,6 +149,27 @@ def run_structured(
 `--dangerously-bypass-approvals-and-sandbox` to `codex exec`. Use
 `CodexRunOptions(permission_mode="default")` or
 `CodexClient(default_permission_mode="default")` to omit that flag.
+
+### `GrokClient`
+
+```python
+class GrokClient:
+    def __init__(
+        self,
+        *,
+        executable: str = "grok",
+        default_model: str = "grok-build",
+        default_effort: Literal["low", "medium", "high", "max"] | None = None,
+        default_timeout_seconds: float = 120.0,
+        default_options: GrokRunOptions | None = None,
+        logger: logging.Logger | None = None,
+        log_prompts: bool = False,
+    ) -> None: ...
+```
+
+GrokClient drives `grok --no-auto-update -p`. It always passes `--model`
+(defaulting to the CLI's common default of `grok-build`). Prompt delivery is
+handled transparently inside the client.
 
 ## StructuredSchema
 
@@ -263,6 +286,54 @@ Important mappings:
 - `resume_extra_args`: escape hatch for unsupported `codex exec resume` flags
 
 `session_id` and `continue_last_session` are mutually exclusive.
+
+### `GrokRunOptions`
+
+`GrokRunOptions` controls one Grok invocation.
+
+```python
+@dataclass(frozen=True)
+class GrokRunOptions:
+    cwd: str | Path | None = None
+    model: str | None = None
+    effort: Literal["low", "medium", "high", "max"] | None = None
+    timeout_seconds: float | None = None
+    permission_mode: Literal[
+        "acceptEdits", "bypassPermissions", "default", "dontAsk", "plan"
+    ] | None = None
+    session_id: str | None = None
+    continue_last_session: bool | None = None
+    fork_session: bool | None = None
+    allowed_tools: tuple[str, ...] | None = None
+    disallowed_tools: tuple[str, ...] | None = None
+    tools: tuple[str, ...] | None = None
+    system_prompt: str | None = None
+    add_dirs: tuple[str | Path, ...] | None = None
+    max_turns: int | None = None
+    extra_args: tuple[str, ...] | None = None
+    env: Mapping[str, str] | None = None
+```
+
+Important mappings:
+
+- `cwd`: subprocess working directory
+- `model`: `--model`
+- `effort`: `--effort`
+- `permission_mode`: `--permission-mode`
+- `session_id`: `--session-id <session_id>`
+- `continue_last_session`: `--continue`
+- `allowed_tools`: repeated `--allow <rule>`
+- `disallowed_tools`: repeated `--deny <rule>`
+- `tools`: `--tools <comma-separated-tools>`
+- `system_prompt`: `--system-prompt-override`
+- `add_dirs`: accepted for API symmetry but not emitted; Grok currently has no
+  documented add-directory flag distinct from `--cwd`
+- `max_turns`: `--max-turns`
+- `extra_args`: escape hatch for unsupported Grok flags
+
+Prompt delivery is automatic: short prompts use `-p <prompt>`, while long
+prompts use `--prompt-file <tempfile>`. Generated invocations include
+`--no-auto-update` by default for headless automation.
 
 ## Execution Modes
 
