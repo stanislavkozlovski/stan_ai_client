@@ -227,6 +227,15 @@ class GrokClient:
         )
 
         envelope_payload = self._parse_envelope_payload(completed.stdout, metadata)
+        if envelope_payload is not None and is_grok_error_payload(envelope_payload):
+            raise self._build_process_error(
+                metadata,
+                returncode=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+                payload=envelope_payload,
+            )
+
         if (
             envelope_payload is not None
             and _is_grok_envelope_metadata_payload(envelope_payload)
@@ -412,7 +421,7 @@ class GrokClient:
         json_schema: StructuredSchema[Any] | None = None,
     ) -> tuple[PreparedGrokCommand, ResolvedGrokRunOptions]:
         effective = self._resolve_options(options)
-        argv: list[str] = [self.executable]
+        argv: list[str] = [self.executable, "--no-auto-update"]
 
         if effective.session_id is not None and effective.continue_last_session:
             raise ValueError("GrokRunOptions cannot set both session_id and continue_last_session")

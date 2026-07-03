@@ -39,6 +39,7 @@ def test_run_text_success(mock_exec: Mock) -> None:
     assert result.text == "hello world"
     argv = mock_exec.call_args[0][0].argv
     assert "grok" in " ".join(argv)
+    assert "--no-auto-update" in argv
     assert "--model" in argv
     assert argv[argv.index("--model") + 1] == "grok-build"
 
@@ -258,25 +259,22 @@ def test_run_structured_accepts_raw_schema_object(mock_exec: Mock) -> None:
 
 
 @patch("stan_ai_client.grok.execute_command")
-def test_run_structured_accepts_raw_error_variant(mock_exec: Mock) -> None:
+def test_run_structured_rejects_error_envelope_before_permissive_validation(
+    mock_exec: Mock,
+) -> None:
     mock_exec.return_value.stdout = '{"type": "error", "message": "domain error"}'
     mock_exec.return_value.stderr = ""
     mock_exec.return_value.returncode = 0
 
-    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
-        {
-            "type": "object",
-            "properties": {
-                "type": {"const": "error"},
-                "message": {"type": "string"},
-            },
-            "required": ["type", "message"],
-            "additionalProperties": False,
-        }
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict(
+        {"type": "object"}
     )
     client = GrokClient()
-    res = client.run_structured("return domain error", schema=schema)
-    assert res.structured_output == {"type": "error", "message": "domain error"}
+    with pytest.raises(GrokProcessError) as exc:
+        client.run_structured("return domain error", schema=schema)
+
+    assert exc.value.payload is not None
+    assert exc.value.payload.extras["type"] == "error"
 
 
 @patch("stan_ai_client.grok.execute_command")

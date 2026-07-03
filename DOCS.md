@@ -167,9 +167,9 @@ class GrokClient:
     ) -> None: ...
 ```
 
-GrokClient drives `grok -p`. It always passes `--model` (defaulting to the
-CLI's common default of `grok-build`). Prompt delivery is handled
-transparently inside the client.
+GrokClient drives `grok --no-auto-update -p`. It always passes `--model`
+(defaulting to the CLI's common default of `grok-build`). Prompt delivery is
+handled transparently inside the client.
 
 ## StructuredSchema
 
@@ -332,7 +332,8 @@ Important mappings:
 - `extra_args`: escape hatch for unsupported Grok flags
 
 Prompt delivery is automatic: short prompts use `-p <prompt>`, while long
-prompts use `--prompt-file <tempfile>`.
+prompts use `--prompt-file <tempfile>`. Generated invocations include
+`--no-auto-update` by default for headless automation.
 
 ## Execution Modes
 

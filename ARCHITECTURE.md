@@ -32,7 +32,8 @@ the caller's wait budget, logs the wait, and retries the same operation.
 
 ### Grok text / JSON / structured mode
 
-Similar to Claude but using `grok -p --output-format plain|json [--json-schema ...]`.
+Similar to Claude but using
+`grok --no-auto-update -p --output-format plain|json [--json-schema ...]`.
 Prompts are passed as argv value (or `--prompt-file` for long prompts).
 Session resume via `--resume` / `--continue` / `--session-id`.
 The returned `GrokJsonPayload` is intentionally minimal (text + ids + optional

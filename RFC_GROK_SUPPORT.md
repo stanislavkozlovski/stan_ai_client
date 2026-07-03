@@ -53,7 +53,7 @@ The primary delivery mechanism is the `-p` / `--single` headless mode (explicitl
 
 ### Headless `-p` Mode as the Integration Point
 
-`grok -p "prompt" --output-format json` (and with `--json-schema`) is the intended surface. It prints a single JSON object (or plain text) and exits. This matches the one-shot subprocess model used by the rest of the library.
+`grok --no-auto-update -p "prompt" --output-format json` (and with `--json-schema`) is the intended surface. It prints a single JSON object (or plain text) and exits. `--no-auto-update` is included by default for scripts and CI so background update checks do not delay or destabilize automation. This matches the one-shot subprocess model used by the rest of the library.
 
 `grok agent ...` subcommands exist for richer integrations but are out of scope here.
 
@@ -79,6 +79,7 @@ The `GrokClient` will handle prompt delivery **transparently** with no user-faci
 - Short and medium prompts are passed directly via the `-p` argument (Python's `subprocess` list form avoids shell quoting issues).
 - For very long prompts (to stay well under argv length limits), the client will automatically write the prompt to a temporary file and use `--prompt-file`.
 - The temporary file (if used) is cleaned up after the invocation.
+- All generated headless invocations include `--no-auto-update` by default.
 
 Users simply pass the prompt string; the library chooses the safest mechanism.
 
