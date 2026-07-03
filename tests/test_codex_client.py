@@ -130,7 +130,7 @@ def test_codex_run_text_can_omit_bypass_and_use_argv_prompt(
     assert "--dangerously-bypass-approvals-and-sandbox" not in argv
     assert recorder.calls[0]["cwd"] == "/tmp/article"
     assert recorder.calls[0]["input"] == ""
-    assert argv[-1] == "tag this"
+    assert argv[-2:] == ("--", "tag this")
     assert argv[argv.index("--cd") + 1] == "/tmp/article"
     assert argv[argv.index("--profile") + 1] == "ci"
     assert "--skip-git-repo-check" in argv
@@ -150,7 +150,22 @@ def test_codex_run_text_uses_default_input_mode(monkeypatch: pytest.MonkeyPatch)
     client.run_text("tag this")
 
     assert recorder.calls[0]["input"] == ""
-    assert recorder.calls[0]["argv"][-1] == "tag this"
+    assert recorder.calls[0]["argv"][-2:] == ("--", "tag this")
+
+
+def test_codex_run_text_separates_argv_prompt_from_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="done\n", stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    client = CodexClient()
+    client.run_text("--not-an-option", options=CodexRunOptions(input_mode="argv"))
+
+    argv = recorder.calls[0]["argv"]
+    assert argv[-2:] == ("--", "--not-an-option")
 
 
 def test_codex_run_text_normalizes_relative_cwd_for_cd(
@@ -214,6 +229,31 @@ def test_codex_run_text_can_continue_last_session(monkeypatch: pytest.MonkeyPatc
     assert argv[-1] == "-"
 
 
+def test_codex_run_text_routes_extra_args_before_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="done\n", stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    client = CodexClient()
+    client.run_text(
+        "continue",
+        options=CodexRunOptions(
+            continue_last_session=True,
+            extra_args=("--color", "never"),
+        ),
+    )
+
+    argv = recorder.calls[0]["argv"]
+    resume_index = argv.index("resume")
+    assert argv.index("--color") < resume_index
+    assert argv.index("never") < resume_index
+    assert argv[resume_index + 1] == "--last"
+    assert argv[-1] == "-"
+
+
 def test_codex_run_text_puts_resume_extra_args_after_resume(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -227,7 +267,7 @@ def test_codex_run_text_puts_resume_extra_args_after_resume(
         "continue",
         options=CodexRunOptions(
             continue_last_session=True,
-            extra_args=("--all",),
+            resume_extra_args=("--all",),
         ),
     )
 
@@ -450,6 +490,36 @@ def test_codex_run_structured_rejects_non_object_schema(
                 "required": ["summary"],
             },
             "additionalProperties",
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "allOf": [
+                            {"type": "string"},
+                        ],
+                    }
+                },
+                "required": ["summary"],
+                "additionalProperties": False,
+            },
+            "allOf",
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "oneOf": [
+                            {"type": "string"},
+                        ],
+                    }
+                },
+                "required": ["summary"],
+                "additionalProperties": False,
+            },
+            "oneOf",
         ),
     ],
 )

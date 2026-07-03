@@ -75,6 +75,7 @@ class ResolvedCodexRunOptions:
     profile: str | None
     config_overrides: tuple[str, ...] | None
     extra_args: tuple[str, ...] | None
+    resume_extra_args: tuple[str, ...] | None
     env: Mapping[str, str] | None
 
 
@@ -371,13 +372,13 @@ class CodexClient:
             json_output=json_output,
             output_schema_path=output_schema_path,
         )
+        if effective.extra_args is not None:
+            argv.extend(effective.extra_args)
 
         if is_resume:
             argv.append("resume")
-            if effective.extra_args is not None:
-                argv.extend(effective.extra_args)
-        elif effective.extra_args is not None:
-            argv.extend(effective.extra_args)
+            if effective.resume_extra_args is not None:
+                argv.extend(effective.resume_extra_args)
 
         if effective.continue_last_session:
             argv.append("--last")
@@ -389,6 +390,7 @@ class CodexClient:
             argv.append("-")
             input_text = prompt
         else:
+            argv.append("--")
             argv.append(prompt)
             input_text = ""
 
@@ -576,6 +578,9 @@ class CodexClient:
             profile=first_set(override.profile, default.profile),
             config_overrides=first_set(override.config_overrides, default.config_overrides),
             extra_args=first_set(override.extra_args, default.extra_args),
+            resume_extra_args=first_set(
+                override.resume_extra_args, default.resume_extra_args
+            ),
             env=first_set(override.env, default.env),
         )
 
@@ -712,6 +717,8 @@ def _resume_session_arg_index(argv: tuple[str, ...]) -> int | None:
         return None
 
     session_index = len(argv) - 2
+    if argv[session_index] == "--":
+        session_index -= 1
     if argv[session_index] == "-":
         return None
     return session_index
@@ -793,16 +800,19 @@ def _iter_codex_output_schema_errors(
                 _iter_codex_output_schema_errors(item, path=f"{path}.items[{index}]")
             )
 
-    for keyword in ("anyOf", "oneOf", "allOf"):
-        value = node.get(keyword)
-        if isinstance(value, list):
-            for index, item in enumerate(value):
-                errors.extend(
-                    _iter_codex_output_schema_errors(
-                        item,
-                        path=f"{path}.{keyword}[{index}]",
-                    )
+    for keyword in ("allOf", "oneOf"):
+        if keyword in node:
+            errors.append(f"{path}.{keyword} is not supported")
+
+    value = node.get("anyOf")
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            errors.extend(
+                _iter_codex_output_schema_errors(
+                    item,
+                    path=f"{path}.anyOf[{index}]",
                 )
+            )
 
     return errors
 

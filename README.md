@@ -216,6 +216,8 @@ validates the returned object locally.
 Codex additionally validates schemas against the OpenAI structured-output
 subset before invoking the CLI. The root schema must be an object, every object
 property must be required, and objects must set `additionalProperties: false`.
+Unsupported composition keywords such as `allOf` and `oneOf` are rejected
+locally.
 Structured Codex runs may also resume existing sessions with `session_id` or
 `continue_last_session`.
 
@@ -388,7 +390,8 @@ See [DOCS.md](./DOCS.md) for:
   subset
 
 For unsupported Claude Code flags, use `RunOptions(extra_args=...)`. For
-unsupported Codex flags, use `CodexRunOptions(extra_args=...)`.
+unsupported Codex exec flags, use `CodexRunOptions(extra_args=...)`; for
+unsupported Codex resume flags, use `CodexRunOptions(resume_extra_args=...)`.
 
 ## Development
 

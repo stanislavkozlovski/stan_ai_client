@@ -239,6 +239,7 @@ class CodexRunOptions:
     profile: str | None = None
     config_overrides: tuple[str, ...] | None = None
     extra_args: tuple[str, ...] | None = None
+    resume_extra_args: tuple[str, ...] | None = None
     env: Mapping[str, str] | None = None
 ```
 
@@ -250,7 +251,7 @@ Important mappings:
 - `permission_mode="bypassPermissions"`: `--dangerously-bypass-approvals-and-sandbox`
 - `permission_mode="default"`: omit the bypass flag
 - `input_mode="stdin"`: prompt sent through stdin with `codex exec -`
-- `input_mode="argv"`: prompt appended directly to argv
+- `input_mode="argv"`: prompt appended to argv after an option separator
 - `session_id`: `codex exec resume <session_id>`
 - `continue_last_session`: `codex exec resume --last`
 - `skip_git_repo_check`: `--skip-git-repo-check`
@@ -258,7 +259,8 @@ Important mappings:
 - `ignore_rules`: `--ignore-rules`
 - `profile`: `--profile`
 - `config_overrides`: repeated `-c <override>`
-- `extra_args`: escape hatch for unsupported Codex flags
+- `extra_args`: escape hatch for unsupported `codex exec` flags
+- `resume_extra_args`: escape hatch for unsupported `codex exec resume` flags
 
 `session_id` and `continue_last_session` are mutually exclusive.
 
@@ -356,7 +358,8 @@ and deletes the temporary schema file.
 Codex schemas are additionally checked against the OpenAI structured-output
 subset before the temporary file is created. The root schema must be an object,
 object properties must all be listed in `required`, and objects must set
-`additionalProperties: false`.
+`additionalProperties: false`. Unsupported composition keywords such as
+`allOf` and `oneOf` are rejected locally.
 
 Codex structured mode supports `session_id` and `continue_last_session`;
 `--output-schema` is passed to `codex exec` before the `resume` subcommand.
@@ -545,7 +548,7 @@ Codex:
 - JSON mode adds `--json`
 - structured mode adds `--output-schema <tempfile>`
 - stdin mode sends the prompt through stdin with `codex exec -`
-- argv mode appends the prompt directly to argv
+- argv mode appends the prompt after `--`
 - argv mode sends empty stdin so inherited piped input is not added as context
 - `bypassPermissions` adds `--dangerously-bypass-approvals-and-sandbox`
 
@@ -594,7 +597,8 @@ ruff check .
   subset
 
 For unsupported Claude flags, use `RunOptions(extra_args=...)`. For unsupported
-Codex flags, use `CodexRunOptions(extra_args=...)`.
+Codex exec flags, use `CodexRunOptions(extra_args=...)`; for unsupported Codex
+resume flags, use `CodexRunOptions(resume_extra_args=...)`.
 
 ## Suggested Usage Boundary
 

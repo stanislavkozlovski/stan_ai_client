@@ -58,6 +58,7 @@ class CodexRunOptions:
     profile: str | None = None
     config_overrides: tuple[str, ...] | None = None
     extra_args: tuple[str, ...] | None = None
+    resume_extra_args: tuple[str, ...] | None = None
     env: Mapping[str, str] | None = None
 
 

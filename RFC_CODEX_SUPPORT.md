@@ -178,7 +178,7 @@ rather than re-deriving them.
 | resume session | `--resume <id>` | `codex exec resume <id>` |
 | continue latest | `--continue` | `codex exec resume --last` |
 | permission mode | `--permission-mode <mode>` | default to `--dangerously-bypass-approvals-and-sandbox` |
-| extra flags | `extra_args` | `extra_args` |
+| extra flags | `extra_args` | exec-level `extra_args`; resume-level `resume_extra_args` |
 
 The first Codex release should not expose fine-grained Codex sandbox options or
 the `--ephemeral` persistence flag. Its effective permission default should be
@@ -224,6 +224,7 @@ class CodexRunOptions:
     profile: str | None = None
     config_overrides: tuple[str, ...] | None = None
     extra_args: tuple[str, ...] | None = None
+    resume_extra_args: tuple[str, ...] | None = None
     env: Mapping[str, str] | None = None
 ```
 
@@ -393,7 +394,8 @@ help exposes the schema flag for resumed exec runs.
 - Add `CodexRunOptions`.
 - Add `CodexClient.run_text()`.
 - Build `codex exec` argv with model, cwd, permission mode, profile, config
-  overrides, session resume, `--skip-git-repo-check`, and `extra_args`.
+  overrides, session resume, `--skip-git-repo-check`, exec-level `extra_args`,
+  and resume-level `resume_extra_args`.
 - Preserve prompt-over-stdin by using `codex exec -` when `input_mode="stdin"`.
 - Normalize missing executable, timeout, non-zero exit, and logging.
 - Add tests that assert argv and stdin behavior.
@@ -436,7 +438,8 @@ Required tests:
 - Codex text mode includes `--dangerously-bypass-approvals-and-sandbox` by
   default.
 - Codex text mode omits the bypass flag when `permission_mode="default"`.
-- Codex argv mode appends the prompt as the final argument.
+- Codex argv mode appends the prompt after `--` so prompt text cannot be parsed
+  as another option.
 - Codex resume by id constructs `("codex", "exec", "resume", "<id>", "-")`.
 - Codex continue latest constructs `("codex", "exec", "resume", "--last", "-")`.
 - Codex JSON mode parses JSONL events into `CodexJsonPayload`.
@@ -445,7 +448,8 @@ Required tests:
   `--output-schema`.
 - Codex structured mode supports resume by id and continue-last-session.
 - Codex structured mode validates schemas against the supported OpenAI
-  structured-output subset before invoking the CLI.
+  structured-output subset before invoking the CLI, including rejecting
+  unsupported composition keywords such as `allOf` and `oneOf`.
 - Codex structured mode validates the final object locally.
 - Codex logs redact schema paths or contents where appropriate.
 - Provider-neutral exceptions catch both Claude and Codex failures.
