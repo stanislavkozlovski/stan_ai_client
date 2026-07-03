@@ -5,10 +5,11 @@
 `stan_ai_client` is a small synchronous Python wrapper around local AI coding
 CLI executables.
 
-It currently supports two backend clients:
+It currently supports three backend clients:
 
 - `ClaudeCodeClient` shells out to `claude -p`.
 - `CodexClient` shells out to `codex exec`.
+- `GrokClient` shells out to `grok -p` (with transparent prompt handling).
 
 The package does not call Anthropic or OpenAI APIs directly. Authentication,
 account selection, and provider configuration stay in the underlying CLI. The
@@ -28,6 +29,14 @@ client's typed rate-limit exception, sleeps only when parsed reset metadata fits
 the caller's wait budget, logs the wait, and retries the same operation.
 
 ## Execution Flow
+
+### Grok text / JSON / structured mode
+
+Similar to Claude but using `grok -p --output-format plain|json [--json-schema ...]`.
+Prompts are passed as argv value (or `--prompt-file` for long prompts).
+Session resume via `--resume` / `--continue` / `--session-id`.
+The returned `GrokJsonPayload` is intentionally minimal (text + ids + optional
+structuredOutput). Duration is measured client-side.
 
 ### Claude text mode
 
@@ -94,6 +103,9 @@ By default, Codex runs with `--dangerously-bypass-approvals-and-sandbox`. Set
 
 - `src/stan_ai_client/claude.py`: `ClaudeCodeClient`, Claude command
   preparation, execution, logging, and error normalization
+- `src/stan_ai_client/grok.py`: `GrokClient`, Grok command preparation (using
+  `-p`), execution, prompt file fallback, logging, and error normalization
+- `src/stan_ai_client/grok_parser.py`: Grok JSON envelope parsing
 - `src/stan_ai_client/client.py`: compatibility shim that re-exports
   `ClaudeCodeClient` for existing imports
 - `src/stan_ai_client/codex.py`: `CodexClient`, Codex command preparation,

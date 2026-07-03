@@ -63,6 +63,32 @@ class CodexRunOptions:
 
 
 @dataclass(frozen=True)
+class GrokRunOptions:
+    """Options for GrokClient.
+
+    Prompt delivery (stdin vs argv) is handled transparently by GrokClient.
+    No input_mode is exposed. Use --prompt-file automatically for very long prompts.
+    """
+
+    cwd: str | Path | None = None
+    model: str | None = None
+    effort: Effort | None = None
+    timeout_seconds: float | None = None
+    permission_mode: PermissionMode | None = None
+    session_id: str | None = None
+    continue_last_session: bool | None = None
+    fork_session: bool | None = None
+    allowed_tools: tuple[str, ...] | None = None
+    disallowed_tools: tuple[str, ...] | None = None
+    tools: tuple[str, ...] | None = None
+    system_prompt: str | None = None
+    add_dirs: tuple[str | Path, ...] | None = None
+    max_turns: int | None = None
+    extra_args: tuple[str, ...] | None = None
+    env: Mapping[str, str] | None = None
+
+
+@dataclass(frozen=True)
 class RateLimitRetryPolicy:
     """Controls opt-in retry behavior for parseable rate-limit responses.
 
@@ -170,6 +196,60 @@ class CodexJsonPayload:
 
 
 @dataclass(frozen=True)
+class GrokJsonPayload:
+    """Payload returned by grok -p --output-format json.
+
+    Much thinner than Claude's envelope. No usage/cost/num_turns.
+    duration_ms is populated client-side by the wrapper.
+    """
+
+    text: str | None
+    stop_reason: str | None
+    session_id: str | None
+    request_id: str | None
+    thought: str | None
+    structured_output: Any | None
+    extras: dict[str, Any] = field(default_factory=dict)
+    _structured_output_present: bool = field(default=False, repr=False)
+
+    @property
+    def has_structured_output(self) -> bool:
+        return self._structured_output_present
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "GrokJsonPayload":
+        # Grok uses camelCase in JSON: stopReason, sessionId, structuredOutput
+        used = {
+            "text",
+            "stopReason",
+            "stop_reason",
+            "sessionId",
+            "session_id",
+            "requestId",
+            "request_id",
+            "thought",
+            "structuredOutput",
+            "structured_output",
+        }
+        stop_reason = data.get("stopReason") or data.get("stop_reason")
+        session_id = data.get("sessionId") or data.get("session_id")
+        request_id = data.get("requestId") or data.get("request_id")
+        structured_output = data.get("structuredOutput") or data.get("structured_output")
+        return cls(
+            text=data.get("text"),
+            stop_reason=stop_reason,
+            session_id=session_id,
+            request_id=request_id,
+            thought=data.get("thought"),
+            structured_output=structured_output,
+            extras={key: value for key, value in data.items() if key not in used},
+            _structured_output_present=bool(
+                "structuredOutput" in data or "structured_output" in data
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class TextRunResult:
     command: CommandMetadata
     stdout: str
@@ -213,4 +293,23 @@ class CodexStructuredRunResult(Generic[TStructured]):
     stderr: str
     returncode: int
     payload: CodexJsonPayload
+    structured_output: TStructured
+
+
+@dataclass(frozen=True)
+class GrokJsonRunResult:
+    command: CommandMetadata
+    stdout: str
+    stderr: str
+    returncode: int
+    payload: GrokJsonPayload
+
+
+@dataclass(frozen=True)
+class GrokStructuredRunResult(Generic[TStructured]):
+    command: CommandMetadata
+    stdout: str
+    stderr: str
+    returncode: int
+    payload: GrokJsonPayload
     structured_output: TStructured

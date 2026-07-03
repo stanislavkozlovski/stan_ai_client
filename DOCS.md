@@ -9,6 +9,7 @@ It supports:
 
 - `ClaudeCodeClient` over the local `claude` executable
 - `CodexClient` over the local `codex exec` command
+- `GrokClient` over the local `grok -p` headless mode
 
 It is designed for scriptable local CLI usage where:
 
@@ -45,6 +46,7 @@ Verify the CLI you want is available:
 ```bash
 claude --version
 codex --version
+grok --version
 ```
 
 ## Versioning And Releases
