@@ -15,8 +15,22 @@ PermissionMode = Literal[
     "auto",
 ]
 CodexPermissionMode = Literal["default", "bypassPermissions"]
+GrokPermissionMode = Literal[
+    "acceptEdits",
+    "bypassPermissions",
+    "default",
+    "dontAsk",
+    "plan",
+]
 InputMode = Literal["stdin", "argv"]
 TStructured = TypeVar("TStructured")
+
+
+def _first_present(data: Mapping[str, Any], *keys: str) -> Any | None:
+    for key in keys:
+        if key in data:
+            return data[key]
+    return None
 
 
 @dataclass(frozen=True)
@@ -74,7 +88,7 @@ class GrokRunOptions:
     model: str | None = None
     effort: Effort | None = None
     timeout_seconds: float | None = None
-    permission_mode: PermissionMode | None = None
+    permission_mode: GrokPermissionMode | None = None
     session_id: str | None = None
     continue_last_session: bool | None = None
     fork_session: bool | None = None
@@ -209,6 +223,7 @@ class GrokJsonPayload:
     request_id: str | None
     thought: str | None
     structured_output: Any | None
+    duration_ms: int | None = None
     extras: dict[str, Any] = field(default_factory=dict)
     _structured_output_present: bool = field(default=False, repr=False)
 
@@ -230,11 +245,12 @@ class GrokJsonPayload:
             "thought",
             "structuredOutput",
             "structured_output",
+            "duration_ms",
         }
-        stop_reason = data.get("stopReason") or data.get("stop_reason")
-        session_id = data.get("sessionId") or data.get("session_id")
-        request_id = data.get("requestId") or data.get("request_id")
-        structured_output = data.get("structuredOutput") or data.get("structured_output")
+        stop_reason = _first_present(data, "stopReason", "stop_reason")
+        session_id = _first_present(data, "sessionId", "session_id")
+        request_id = _first_present(data, "requestId", "request_id")
+        structured_output = _first_present(data, "structuredOutput", "structured_output")
         return cls(
             text=data.get("text"),
             stop_reason=stop_reason,
@@ -242,6 +258,7 @@ class GrokJsonPayload:
             request_id=request_id,
             thought=data.get("thought"),
             structured_output=structured_output,
+            duration_ms=data.get("duration_ms"),
             extras={key: value for key, value in data.items() if key not in used},
             _structured_output_present=bool(
                 "structuredOutput" in data or "structured_output" in data

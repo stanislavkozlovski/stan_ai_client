@@ -232,7 +232,7 @@ client = GrokClient()  # defaults to model="grok-build"
 result = client.run_text("Reply with the single word: ok")
 print(result.text)
 
-# JSON + session resume
+# JSON + stable named session
 r = client.run_json("Summarize briefly.", options=GrokRunOptions(session_id="..."))
 print(r.payload.text)
 print(r.payload.session_id)
@@ -320,11 +320,10 @@ from stan_ai_client import (
     CodexStructuredRunResult,
     ClaudeJsonPayload,
     CodexJsonPayload,
-    GrokClient,
     GrokJsonPayload,
     GrokJsonRunResult,
+    GrokPermissionMode,
     GrokStructuredRunResult,
-    GrokRunOptions,
     CommandMetadata,
     StructuredSchema,
     AIClientError,

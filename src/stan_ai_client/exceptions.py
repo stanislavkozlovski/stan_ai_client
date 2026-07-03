@@ -193,8 +193,16 @@ class CodexSchemaValidationError(SchemaValidationError, CodexCodeError):
     pass
 
 
+class GrokCodeError(AIClientError):
+    pass
+
+
+class GrokSchemaValidationError(SchemaValidationError, GrokCodeError):
+    pass
+
+
 class StructuredSchemaValidationError(
-    ClaudeSchemaValidationError, CodexSchemaValidationError
+    ClaudeSchemaValidationError, CodexSchemaValidationError, GrokSchemaValidationError
 ):
     pass
 
@@ -258,13 +266,6 @@ class CodexRateLimitError(RateLimitError, CodexLimitError):
 
 
 # --- Grok errors (mirror the pattern of Claude/Codex) ---
-
-class GrokCodeError(AIClientError):
-    pass
-
-
-class GrokSchemaValidationError(SchemaValidationError, GrokCodeError):
-    pass
 
 
 class GrokExecutableNotFoundError(ExecutableNotFoundError, GrokCodeError):

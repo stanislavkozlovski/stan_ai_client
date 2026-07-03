@@ -7,9 +7,7 @@ Skips gracefully if grok is not available.
 
 from __future__ import annotations
 
-import os
 import shutil
-import sys
 
 from stan_ai_client import GrokClient, GrokRunOptions, StructuredSchema
 

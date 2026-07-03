@@ -4,7 +4,7 @@ import logging
 import os
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 from typing import Any, Callable, Mapping, TypeVar
@@ -31,6 +31,7 @@ from .types import (
     Effort,
     GrokJsonPayload,
     GrokJsonRunResult,
+    GrokPermissionMode,
     GrokRunOptions,
     GrokStructuredRunResult,
     RateLimitRetryPolicy,
@@ -57,7 +58,7 @@ class ResolvedGrokRunOptions:
     model: str
     effort: Effort | None
     timeout_seconds: float
-    permission_mode: str | None
+    permission_mode: GrokPermissionMode | None
     session_id: str | None
     continue_last_session: bool
     fork_session: bool
@@ -281,7 +282,7 @@ class GrokClient:
             raise ValueError("GrokRunOptions cannot set both session_id and continue_last_session")
 
         if effective.session_id is not None:
-            argv.extend(["--resume", effective.session_id])
+            argv.extend(["--session-id", effective.session_id])
         elif effective.continue_last_session:
             argv.append("--continue")
 
@@ -301,7 +302,7 @@ class GrokClient:
                 except Exception:
                     pass
                 raise
-            argv.extend(["-p", "--prompt-file", tmp_path])
+            argv.extend(["--prompt-file", tmp_path])
             self._current_tmp_path = tmp_path
         else:
             argv.extend(["-p", prompt])
@@ -315,9 +316,11 @@ class GrokClient:
             argv.extend(["--effort", effective.effort])
 
         if effective.allowed_tools is not None:
-            argv.extend(["--allow", ",".join(effective.allowed_tools)])
+            for rule in effective.allowed_tools:
+                argv.extend(["--allow", rule])
         if effective.disallowed_tools is not None:
-            argv.extend(["--deny", ",".join(effective.disallowed_tools)])
+            for rule in effective.disallowed_tools:
+                argv.extend(["--deny", rule])
         if effective.tools is not None:
             argv.extend(["--tools", ",".join(effective.tools)])
         if effective.permission_mode is not None:
@@ -354,6 +357,23 @@ class GrokClient:
         try:
             completed = execute_command(prepared)
         except FileNotFoundError as exc:
+            if prepared.cwd is not None and exc.filename == prepared.cwd:
+                metadata = CommandMetadata(
+                    argv=prepared.argv,
+                    cwd=prepared.cwd,
+                    elapsed_ms=(time.monotonic() - started_at) * 1000,
+                )
+                self.logger.error("Grok working directory not found cwd=%s", prepared.cwd)
+                self._cleanup_tmp(tmp_path)
+                raise GrokProcessError(
+                    f"Grok working directory not found: {prepared.cwd}",
+                    command=metadata,
+                    returncode=127,
+                    stdout="",
+                    stderr="",
+                    payload=None,
+                ) from exc
+
             self.logger.error("Grok executable not found executable=%s", self.executable)
             self._cleanup_tmp(tmp_path)
             raise GrokExecutableNotFoundError(self.executable) from exc
@@ -402,6 +422,8 @@ class GrokClient:
         stdout = completed.stdout
         stderr = completed.stderr
         payload = try_parse_grok_json_payload(stdout)
+        if payload is not None:
+            payload = replace(payload, duration_ms=int(metadata.elapsed_ms))
 
         if completed.returncode != 0:
             raise self._build_process_error(

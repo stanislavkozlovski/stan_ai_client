@@ -7,6 +7,7 @@ import pytest
 from stan_ai_client import (
     ClaudeSchemaValidationError,
     CodexSchemaValidationError,
+    GrokSchemaValidationError,
     SchemaValidationError,
     StructuredSchema,
     StructuredSchemaValidationError,
@@ -19,6 +20,7 @@ def test_structured_schema_rejects_non_dict_input() -> None:
     assert isinstance(excinfo.value, SchemaValidationError)
     assert isinstance(excinfo.value, ClaudeSchemaValidationError)
     assert isinstance(excinfo.value, CodexSchemaValidationError)
+    assert isinstance(excinfo.value, GrokSchemaValidationError)
 
 
 def test_structured_schema_rejects_invalid_json_schema() -> None:

@@ -287,6 +287,52 @@ Important mappings:
 
 `session_id` and `continue_last_session` are mutually exclusive.
 
+### `GrokRunOptions`
+
+`GrokRunOptions` controls one Grok invocation.
+
+```python
+@dataclass(frozen=True)
+class GrokRunOptions:
+    cwd: str | Path | None = None
+    model: str | None = None
+    effort: Literal["low", "medium", "high", "max"] | None = None
+    timeout_seconds: float | None = None
+    permission_mode: Literal[
+        "acceptEdits", "bypassPermissions", "default", "dontAsk", "plan"
+    ] | None = None
+    session_id: str | None = None
+    continue_last_session: bool | None = None
+    fork_session: bool | None = None
+    allowed_tools: tuple[str, ...] | None = None
+    disallowed_tools: tuple[str, ...] | None = None
+    tools: tuple[str, ...] | None = None
+    system_prompt: str | None = None
+    add_dirs: tuple[str | Path, ...] | None = None
+    max_turns: int | None = None
+    extra_args: tuple[str, ...] | None = None
+    env: Mapping[str, str] | None = None
+```
+
+Important mappings:
+
+- `cwd`: subprocess working directory
+- `model`: `--model`
+- `effort`: `--effort`
+- `permission_mode`: `--permission-mode`
+- `session_id`: `--session-id <session_id>`
+- `continue_last_session`: `--continue`
+- `allowed_tools`: repeated `--allow <rule>`
+- `disallowed_tools`: repeated `--deny <rule>`
+- `tools`: `--tools <comma-separated-tools>`
+- `system_prompt`: `--system-prompt-override`
+- `add_dirs`: repeated `--cwd <dir>`
+- `max_turns`: `--max-turns`
+- `extra_args`: escape hatch for unsupported Grok flags
+
+Prompt delivery is automatic: short prompts use `-p <prompt>`, while long
+prompts use `--prompt-file <tempfile>`.
+
 ## Execution Modes
 
 ### Claude Text
