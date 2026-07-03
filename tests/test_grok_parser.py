@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+
 from stan_ai_client.grok_parser import (
     parse_grok_json_payload,
+    raw_grok_structured_payload,
     summarize_grok_error_text,
     try_parse_grok_json_payload,
 )
@@ -25,27 +28,21 @@ def test_parse_structured() -> None:
     assert payload.structured_output == {"x": 1}
 
 
-def test_parse_raw_structured_output() -> None:
-    payload = parse_grok_json_payload('{"x": 1}', raw_structured_output=True)
+def test_raw_structured_payload() -> None:
+    payload = raw_grok_structured_payload(json.loads('{"x": 1}'))
     assert payload.has_structured_output is True
     assert payload.structured_output == {"x": 1}
     assert payload.extras == {}
 
 
-def test_parse_raw_structured_output_preserves_structured_output_key() -> None:
-    payload = parse_grok_json_payload(
-        '{"structuredOutput": "ok"}',
-        raw_structured_output=True,
-    )
+def test_raw_structured_payload_preserves_structured_output_key() -> None:
+    payload = raw_grok_structured_payload(json.loads('{"structuredOutput": "ok"}'))
     assert payload.has_structured_output is True
     assert payload.structured_output == {"structuredOutput": "ok"}
 
 
-def test_parse_raw_structured_output_preserves_envelope_like_keys() -> None:
-    payload = parse_grok_json_payload(
-        '{"text": "desc", "structuredOutput": "ok"}',
-        raw_structured_output=True,
-    )
+def test_raw_structured_payload_preserves_envelope_like_keys() -> None:
+    payload = raw_grok_structured_payload(json.loads('{"text": "desc", "structuredOutput": "ok"}'))
     assert payload.has_structured_output is True
     assert payload.structured_output == {"text": "desc", "structuredOutput": "ok"}
     assert payload.text is None

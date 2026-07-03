@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
-from typing import Any, Callable, Mapping, NoReturn, TypeVar
+from typing import Any, Callable, Mapping, NoReturn, TypeVar, overload
 
 from jsonschema.exceptions import ValidationError
 
@@ -23,11 +23,13 @@ from .exceptions import (
     GrokTimeoutError,
 )
 from .grok_parser import (
+    GrokStructuredOutcome,
+    classify_grok_structured_stdout,
     is_grok_error_payload,
     summarize_grok_error_text,
     try_parse_grok_json_payload,
 )
-from .rate_limits import is_rate_limit_text, parse_rate_limit_info
+from .rate_limits import is_grok_rate_limit_text, parse_rate_limit_info
 from .schema import StructuredSchema
 from .transport import PreparedCommand, execute_command
 from .types import (
@@ -121,7 +123,7 @@ class GrokClient:
         stderr = completed.stderr
 
         if completed.returncode != 0:
-            payload = try_parse_grok_json_payload(stdout)
+            payload = self._stamp(try_parse_grok_json_payload(stdout), metadata)
             raise self._build_process_error(
                 metadata,
                 returncode=completed.returncode,
@@ -130,9 +132,7 @@ class GrokClient:
                 payload=payload,
             )
 
-        payload = try_parse_grok_json_payload(stdout)
-        if payload is not None:
-            payload = replace(payload, duration_ms=int(metadata.elapsed_ms))
+        payload = self._stamp(try_parse_grok_json_payload(stdout), metadata)
         if payload is not None and is_grok_error_payload(payload):
             raise self._build_process_error(
                 metadata,
@@ -220,93 +220,57 @@ class GrokClient:
         self._log_start(prompt, output_format="json", prepared=prepared, effective=effective)
         self.logger.debug("Grok structured mode enabled schema_validated_locally=True")
 
-        completed, metadata, payload = self._execute_json(
-            prepared,
-            protocol_name="structured mode",
-            raw_structured_output=True,
-        )
+        completed, metadata = self._execute(prepared)
+        stdout = completed.stdout
+        stderr = completed.stderr
 
-        envelope_payload = self._parse_envelope_payload(completed.stdout, metadata)
-        if envelope_payload is not None and is_grok_error_payload(envelope_payload):
+        if completed.returncode != 0:
             raise self._build_process_error(
                 metadata,
                 returncode=completed.returncode,
-                stdout=completed.stdout,
-                stderr=completed.stderr,
-                payload=envelope_payload,
+                stdout=stdout,
+                stderr=stderr,
+                payload=self._stamp(try_parse_grok_json_payload(stdout), metadata),
             )
 
-        if (
-            envelope_payload is not None
-            and _is_grok_structured_output_failure_payload(envelope_payload)
-        ):
+        outcome = classify_grok_structured_stdout(stdout)
+        if outcome is None:
+            error = self._build_json_protocol_error(
+                metadata,
+                stdout=stdout,
+                stderr=stderr,
+                protocol_name="structured mode",
+            )
+            self._log_protocol_error(error)
+            raise error
+
+        if outcome.kind == "error":
+            raise self._build_process_error(
+                metadata,
+                returncode=completed.returncode,
+                stdout=stdout,
+                stderr=stderr,
+                payload=self._stamp(outcome.payload, metadata),
+            )
+
+        if outcome.kind == "missing":
             self.logger.debug("Grok structuredOutput missing")
             missing_error = GrokStructuredOutputMissingError(
                 "Grok did not return structuredOutput in structured mode",
                 command=metadata,
-                stdout=completed.stdout,
-                stderr=completed.stderr,
-                payload=envelope_payload,
+                stdout=stdout,
+                stderr=stderr,
+                payload=self._stamp(outcome.payload, metadata),
             )
             self._log_protocol_error(missing_error)
             raise missing_error
 
-        if not payload.has_structured_output:
-            self.logger.debug("Grok structuredOutput missing")
-            missing_error = GrokStructuredOutputMissingError(
-                "Grok did not return structuredOutput in structured mode",
-                command=metadata,
-                stdout=completed.stdout,
-                stderr=completed.stderr,
-                payload=payload,
-            )
-            self._log_protocol_error(missing_error)
-            raise missing_error
-
-        self.logger.debug("Grok structuredOutput present")
-
-        envelope_validation_error: ValidationError | None = None
-        if (
-            envelope_payload is not None
-            and _is_grok_structured_envelope_payload(envelope_payload)
-        ):
-            try:
-                structured_output = schema.validate_response(envelope_payload.structured_output)
-            except ValidationError as exc:
-                envelope_validation_error = exc
-                self.logger.debug(
-                    "Grok envelope structuredOutput validation failed; trying raw JSON value"
-                )
-            else:
-                self.logger.debug("Grok envelope structuredOutput validation succeeded")
-                payload = envelope_payload
-                return self._build_structured_result(
-                    completed=completed,
-                    metadata=metadata,
-                    payload=payload,
-                    structured_output=structured_output,
-                )
-
-        try:
-            structured_output = schema.validate_response(payload.structured_output)
-        except ValidationError as exc:
-            if envelope_payload is not None and is_grok_error_payload(envelope_payload):
-                raise self._build_process_error(
-                    metadata,
-                    returncode=completed.returncode,
-                    stdout=completed.stdout,
-                    stderr=completed.stderr,
-                    payload=envelope_payload,
-                )
-            payload, structured_output = self._validate_envelope_structured_output_or_raise(
-                schema=schema,
-                completed=completed,
-                metadata=metadata,
-                raw_payload=payload,
-                envelope_payload=envelope_payload,
-                validation_error=envelope_validation_error or exc,
-            )
-
+        payload, structured_output = self._validate_structured_candidates(
+            schema=schema,
+            outcome=outcome,
+            completed=completed,
+            metadata=metadata,
+        )
         self.logger.debug("Grok structuredOutput validation succeeded")
 
         return self._build_structured_result(
@@ -314,6 +278,32 @@ class GrokClient:
             metadata=metadata,
             payload=payload,
             structured_output=structured_output,
+        )
+
+    def _validate_structured_candidates(
+        self,
+        *,
+        schema: StructuredSchema[TStructured],
+        outcome: GrokStructuredOutcome,
+        completed: CompletedProcess[str],
+        metadata: CommandMetadata,
+    ) -> tuple[GrokJsonPayload, TStructured]:
+        first_error: ValidationError | None = None
+        for candidate_payload, value in outcome.candidates:
+            try:
+                structured_output = schema.validate_response(value)
+            except ValidationError as exc:
+                if first_error is None:
+                    first_error = exc
+                continue
+            return self._stamp(candidate_payload, metadata), structured_output
+
+        assert first_error is not None  # candidates is never empty in "validate" outcomes
+        self._raise_structured_validation_error(
+            schema_error=first_error,
+            completed=completed,
+            metadata=metadata,
+            payload=self._stamp(outcome.payload, metadata),
         )
 
     def _build_structured_result(
@@ -340,42 +330,6 @@ class GrokClient:
             payload=payload,
         )
         return result
-
-    def _parse_envelope_payload(
-        self,
-        stdout: str,
-        metadata: CommandMetadata,
-    ) -> GrokJsonPayload | None:
-        envelope_payload = try_parse_grok_json_payload(stdout)
-        if envelope_payload is None:
-            return None
-        return replace(envelope_payload, duration_ms=int(metadata.elapsed_ms))
-
-    def _validate_envelope_structured_output_or_raise(
-        self,
-        *,
-        schema: StructuredSchema[TStructured],
-        completed: CompletedProcess[str],
-        metadata: CommandMetadata,
-        raw_payload: GrokJsonPayload,
-        envelope_payload: GrokJsonPayload | None,
-        validation_error: ValidationError,
-    ) -> tuple[GrokJsonPayload, TStructured]:
-        if envelope_payload is not None and envelope_payload.has_structured_output:
-            try:
-                structured_output = schema.validate_response(envelope_payload.structured_output)
-            except ValidationError:
-                pass
-            else:
-                self.logger.debug("Grok envelope structuredOutput validation succeeded")
-                return envelope_payload, structured_output
-
-        self._raise_structured_validation_error(
-            schema_error=validation_error,
-            completed=completed,
-            metadata=metadata,
-            payload=raw_payload,
-        )
 
     def _raise_structured_validation_error(
         self,
@@ -550,22 +504,32 @@ class GrokClient:
             except Exception as exc:
                 self.logger.debug("Failed to cleanup grok prompt temp file %s: %s", tmp_path, exc)
 
+    @overload
+    def _stamp(self, payload: GrokJsonPayload, metadata: CommandMetadata) -> GrokJsonPayload: ...
+
+    @overload
+    def _stamp(self, payload: None, metadata: CommandMetadata) -> None: ...
+
+    def _stamp(
+        self,
+        payload: GrokJsonPayload | None,
+        metadata: CommandMetadata,
+    ) -> GrokJsonPayload | None:
+        """Attach the measured duration so every surfaced payload carries it."""
+        if payload is None:
+            return None
+        return replace(payload, duration_ms=int(metadata.elapsed_ms))
+
     def _execute_json(
         self,
         prepared: PreparedGrokCommand,
         *,
         protocol_name: str,
-        raw_structured_output: bool = False,
     ) -> tuple[CompletedProcess[str], CommandMetadata, GrokJsonPayload]:
         completed, metadata = self._execute(prepared)
         stdout = completed.stdout
         stderr = completed.stderr
-        payload = try_parse_grok_json_payload(
-            stdout,
-            raw_structured_output=raw_structured_output,
-        )
-        if payload is not None:
-            payload = replace(payload, duration_ms=int(metadata.elapsed_ms))
+        payload = self._stamp(try_parse_grok_json_payload(stdout), metadata)
 
         if completed.returncode != 0:
             raise self._build_process_error(
@@ -607,13 +571,7 @@ class GrokClient:
         payload: GrokJsonPayload | None,
     ) -> GrokProcessError:
         error_text = summarize_grok_error_text(payload=payload, stdout=stdout, stderr=stderr)
-        normalized_error_text = error_text.lower().replace("_", "-").replace(" ", "-")
-        if (
-            is_rate_limit_text(error_text)
-            or "429" in normalized_error_text
-            or "resource-exhausted" in normalized_error_text
-            or "you've-hit-the-rate-limit" in normalized_error_text
-        ):
+        if is_grok_rate_limit_text(error_text):
             rate_limit = parse_rate_limit_info(error_text)
             self.logger.warning(
                 "Grok run failed returncode=%d elapsed_ms=%.0f error=%s retry_after_seconds=%s reset_at=%s",
@@ -788,30 +746,3 @@ def _redact_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
             continue
         redacted.append(value)
     return tuple(redacted)
-
-
-def _is_grok_structured_envelope_payload(payload: GrokJsonPayload) -> bool:
-    return payload.has_structured_output and _is_grok_envelope_metadata_payload(payload)
-
-
-def _is_grok_structured_output_failure_payload(payload: GrokJsonPayload) -> bool:
-    if payload.has_structured_output:
-        return False
-    if (
-        "structuredOutputError" in payload.extras
-        or "structured_output_error" in payload.extras
-    ):
-        return True
-    return payload.text is not None and _is_grok_envelope_metadata_payload(payload)
-
-
-def _is_grok_envelope_metadata_payload(payload: GrokJsonPayload) -> bool:
-    return any(
-        value is not None
-        for value in (
-            payload.stop_reason,
-            payload.session_id,
-            payload.request_id,
-            payload.thought,
-        )
-    )

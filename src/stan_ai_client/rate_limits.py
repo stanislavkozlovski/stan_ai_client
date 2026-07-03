@@ -36,6 +36,14 @@ def is_rate_limit_text(text: str) -> bool:
     )
 
 
+def is_grok_rate_limit_text(text: str) -> bool:
+    """Grok surfaces quota exhaustion with gRPC ``resource_exhausted`` wording
+    that the shared markers miss; everything else is already covered."""
+    if is_rate_limit_text(text):
+        return True
+    return "resource exhausted" in text.lower().replace("_", " ")
+
+
 def parse_rate_limit_info(
     text: str,
     *,
