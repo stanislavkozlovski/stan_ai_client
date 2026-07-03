@@ -25,6 +25,13 @@ def test_parse_structured() -> None:
     assert payload.structured_output == {"x": 1}
 
 
+def test_parse_raw_structured_output() -> None:
+    payload = parse_grok_json_payload('{"x": 1}', raw_structured_output=True)
+    assert payload.has_structured_output is True
+    assert payload.structured_output == {"x": 1}
+    assert payload.extras == {}
+
+
 def test_parse_preserves_falsy_structured_output() -> None:
     payload = parse_grok_json_payload('{"text": "false", "structuredOutput": false}')
     assert payload.has_structured_output is True

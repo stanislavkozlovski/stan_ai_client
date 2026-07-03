@@ -36,7 +36,9 @@ Similar to Claude but using `grok -p --output-format plain|json [--json-schema .
 Prompts are passed as argv value (or `--prompt-file` for long prompts).
 Session resume via `--resume` / `--continue` / `--session-id`.
 The returned `GrokJsonPayload` is intentionally minimal (text + ids + optional
-structuredOutput). Duration is measured client-side.
+structuredOutput). Structured mode also accepts newer Grok builds that return
+the raw validated JSON value from `--json-schema`. Duration is measured
+client-side.
 
 ### Claude text mode
 

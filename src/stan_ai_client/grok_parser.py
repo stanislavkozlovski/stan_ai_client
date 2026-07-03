@@ -5,21 +5,48 @@ import json
 from .types import GrokJsonPayload
 
 
-def parse_grok_json_payload(text: str) -> GrokJsonPayload:
+def parse_grok_json_payload(
+    text: str,
+    *,
+    raw_structured_output: bool = False,
+) -> GrokJsonPayload:
     raw = text.strip()
     if not raw:
         raise ValueError("empty JSON output")
 
     parsed = json.loads(raw)
+    if raw_structured_output:
+        if isinstance(parsed, dict) and (
+            "structuredOutput" in parsed or "structured_output" in parsed
+        ):
+            return GrokJsonPayload.from_dict(parsed)
+
+        return GrokJsonPayload(
+            text=None,
+            stop_reason=None,
+            session_id=None,
+            request_id=None,
+            thought=None,
+            structured_output=parsed,
+            _structured_output_present=True,
+        )
+
     if not isinstance(parsed, dict):
         raise ValueError("expected a JSON object")
 
     return GrokJsonPayload.from_dict(parsed)
 
 
-def try_parse_grok_json_payload(text: str) -> GrokJsonPayload | None:
+def try_parse_grok_json_payload(
+    text: str,
+    *,
+    raw_structured_output: bool = False,
+) -> GrokJsonPayload | None:
     try:
-        return parse_grok_json_payload(text)
+        return parse_grok_json_payload(
+            text,
+            raw_structured_output=raw_structured_output,
+        )
     except (TypeError, ValueError, json.JSONDecodeError):
         return None
 

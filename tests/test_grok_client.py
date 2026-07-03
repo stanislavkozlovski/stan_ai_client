@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from unittest.mock import Mock, patch
 
 import pytest
@@ -81,6 +82,23 @@ def test_policy_rules_are_repeated_flags(mock_exec: Mock) -> None:
 
 
 @patch("stan_ai_client.grok.execute_command")
+def test_add_dirs_do_not_emit_cwd_flags(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = "ok\n"
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    client = GrokClient()
+    client.run_text(
+        "say hi",
+        options=GrokRunOptions(cwd="/tmp/repo", add_dirs=("/tmp/extra",)),
+    )
+
+    prepared = mock_exec.call_args[0][0]
+    assert prepared.cwd == "/tmp/repo"
+    assert "--cwd" not in prepared.argv
+
+
+@patch("stan_ai_client.grok.execute_command")
 def test_run_json_success(mock_exec: Mock) -> None:
     payload = '{"text": "ok", "stopReason": "EndTurn", "sessionId": "s1", "requestId": "r1"}'
     mock_exec.return_value.stdout = payload
@@ -131,6 +149,27 @@ def test_run_structured_accepts_falsy_output(mock_exec: Mock) -> None:
 
 
 @patch("stan_ai_client.grok.execute_command")
+def test_run_structured_accepts_raw_schema_object(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = '{"ans": 42}'
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, int]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"ans": {"type": "integer"}},
+            "required": ["ans"],
+            "additionalProperties": False,
+        }
+    )
+    client = GrokClient()
+    res = client.run_structured("return ans", schema=schema)
+    assert res.structured_output == {"ans": 42}
+    assert res.payload.has_structured_output is True
+    assert res.payload.structured_output == {"ans": 42}
+
+
+@patch("stan_ai_client.grok.execute_command")
 def test_error_raises_process_error(mock_exec: Mock) -> None:
     mock_exec.return_value.stdout = ""
     mock_exec.return_value.stderr = "Error: something bad"
@@ -175,3 +214,39 @@ def test_long_prompt_uses_file(mock_exec: Mock) -> None:
     assert "-p" not in argv
     assert "--prompt-file" in argv
     assert argv[argv.index("--prompt-file") + 1].endswith(".txt")
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_long_prompt_temp_files_are_per_prepared_command(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = "done"
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    client = GrokClient()
+    prepared_one, _ = client._prepare(
+        "x" * 5000,
+        output_format="plain",
+        options=None,
+    )
+    prepared_two, _ = client._prepare(
+        "y" * 5000,
+        output_format="plain",
+        options=None,
+    )
+    path_one = prepared_one.prompt_file_path
+    path_two = prepared_two.prompt_file_path
+
+    try:
+        assert path_one is not None
+        assert path_two is not None
+        assert path_one != path_two
+        assert os.path.exists(path_one)
+        assert os.path.exists(path_two)
+
+        client._execute(prepared_one)
+
+        assert not os.path.exists(path_one)
+        assert os.path.exists(path_two)
+    finally:
+        client._cleanup_tmp(path_one)
+        client._cleanup_tmp(path_two)

@@ -72,6 +72,11 @@ class ResolvedGrokRunOptions:
     env: Mapping[str, str] | None
 
 
+@dataclass(frozen=True)
+class PreparedGrokCommand(PreparedCommand):
+    prompt_file_path: str | None = None
+
+
 class GrokClient:
     def __init__(
         self,
@@ -91,7 +96,6 @@ class GrokClient:
         self.default_options = default_options or GrokRunOptions()
         self.logger = logger or DEFAULT_LOGGER
         self.log_prompts = log_prompts
-        self._current_tmp_path: str | None = None
 
     def run_text(
         self,
@@ -203,6 +207,7 @@ class GrokClient:
         completed, metadata, payload = self._execute_json(
             prepared,
             protocol_name="structured mode",
+            raw_structured_output=True,
         )
 
         if not payload.has_structured_output:
@@ -274,7 +279,7 @@ class GrokClient:
         output_format: str,
         options: GrokRunOptions | None,
         json_schema: StructuredSchema[Any] | None = None,
-    ) -> tuple[PreparedCommand, ResolvedGrokRunOptions]:
+    ) -> tuple[PreparedGrokCommand, ResolvedGrokRunOptions]:
         effective = self._resolve_options(options)
         argv: list[str] = [self.executable]
 
@@ -290,7 +295,7 @@ class GrokClient:
             argv.append("--fork-session")
 
         # Transparent prompt delivery
-        self._current_tmp_path = None
+        prompt_file_path = None
         if len(prompt) > PROMPT_FILE_THRESHOLD:
             fd, tmp_path = tempfile.mkstemp(prefix="grok_prompt_", suffix=".txt", text=True)
             try:
@@ -303,7 +308,7 @@ class GrokClient:
                     pass
                 raise
             argv.extend(["--prompt-file", tmp_path])
-            self._current_tmp_path = tmp_path
+            prompt_file_path = tmp_path
         else:
             argv.extend(["-p", prompt])
 
@@ -327,9 +332,6 @@ class GrokClient:
             argv.extend(["--permission-mode", effective.permission_mode])
         if effective.system_prompt is not None:
             argv.extend(["--system-prompt-override", effective.system_prompt])
-        if effective.add_dirs is not None:
-            for directory in effective.add_dirs:
-                argv.extend(["--cwd", str(directory)])
         if effective.max_turns is not None:
             argv.extend(["--max-turns", str(effective.max_turns)])
         if effective.extra_args is not None:
@@ -342,18 +344,19 @@ class GrokClient:
             merged_env.update(effective.env)
 
         cwd = None if effective.cwd is None else str(effective.cwd)
-        prepared = PreparedCommand(
+        prepared = PreparedGrokCommand(
             argv=tuple(argv),
             cwd=cwd,
             timeout_seconds=effective.timeout_seconds,
             input_text=input_text,
             env=merged_env,
+            prompt_file_path=prompt_file_path,
         )
         return prepared, effective
 
-    def _execute(self, prepared: PreparedCommand) -> tuple[CompletedProcess[str], CommandMetadata]:
+    def _execute(self, prepared: PreparedGrokCommand) -> tuple[CompletedProcess[str], CommandMetadata]:
         started_at = time.monotonic()
-        tmp_path = self._current_tmp_path
+        tmp_path = prepared.prompt_file_path
         try:
             completed = execute_command(prepared)
         except FileNotFoundError as exc:
@@ -364,7 +367,6 @@ class GrokClient:
                     elapsed_ms=(time.monotonic() - started_at) * 1000,
                 )
                 self.logger.error("Grok working directory not found cwd=%s", prepared.cwd)
-                self._cleanup_tmp(tmp_path)
                 raise GrokProcessError(
                     f"Grok working directory not found: {prepared.cwd}",
                     command=metadata,
@@ -375,7 +377,6 @@ class GrokClient:
                 ) from exc
 
             self.logger.error("Grok executable not found executable=%s", self.executable)
-            self._cleanup_tmp(tmp_path)
             raise GrokExecutableNotFoundError(self.executable) from exc
         except TimeoutExpired as exc:
             metadata = CommandMetadata(
@@ -390,11 +391,9 @@ class GrokClient:
                 _redact_argv(prepared.argv),
                 metadata.elapsed_ms,
             )
-            self._cleanup_tmp(tmp_path)
             raise GrokTimeoutError(metadata, prepared.timeout_seconds) from exc
         finally:
             self._cleanup_tmp(tmp_path)
-            self._current_tmp_path = None
 
         metadata = CommandMetadata(
             argv=prepared.argv,
@@ -414,14 +413,18 @@ class GrokClient:
 
     def _execute_json(
         self,
-        prepared: PreparedCommand,
+        prepared: PreparedGrokCommand,
         *,
         protocol_name: str,
+        raw_structured_output: bool = False,
     ) -> tuple[CompletedProcess[str], CommandMetadata, GrokJsonPayload]:
         completed, metadata = self._execute(prepared)
         stdout = completed.stdout
         stderr = completed.stderr
-        payload = try_parse_grok_json_payload(stdout)
+        payload = try_parse_grok_json_payload(
+            stdout,
+            raw_structured_output=raw_structured_output,
+        )
         if payload is not None:
             payload = replace(payload, duration_ms=int(metadata.elapsed_ms))
 

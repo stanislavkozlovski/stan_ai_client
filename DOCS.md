@@ -326,7 +326,8 @@ Important mappings:
 - `disallowed_tools`: repeated `--deny <rule>`
 - `tools`: `--tools <comma-separated-tools>`
 - `system_prompt`: `--system-prompt-override`
-- `add_dirs`: repeated `--cwd <dir>`
+- `add_dirs`: accepted for API symmetry but not emitted; Grok currently has no
+  documented add-directory flag distinct from `--cwd`
 - `max_turns`: `--max-turns`
 - `extra_args`: escape hatch for unsupported Grok flags
 

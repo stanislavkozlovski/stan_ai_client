@@ -96,10 +96,14 @@ These differences are fundamental to the CLI contract and must be accepted (or w
     "sessionId": "...",
     "requestId": "...",
     "thought": "...",                 // sometimes present
-    "structuredOutput": { ... }       // only when --json-schema is used
+    "structuredOutput": { ... }       // sometimes present with --json-schema
   }
   ```
   There is **no** `total_cost_usd`, detailed `usage`, `num_turns`, `model_usage`, `permission_denials`, etc. in the `-p` response.
+
+  Newer Grok builds may return the validated JSON value itself for
+  `--json-schema` rather than wrapping it in `structuredOutput`; structured mode
+  accepts both forms and validates the selected value locally.
 
   The client wrapper **will** populate `duration_ms` itself by measuring elapsed time (already done via `CommandMetadata.elapsed_ms` for all backends). Usage, cost, and token counts are not available from the Grok headless contract and will be omitted (or exposed as `None`/empty) in `GrokJsonPayload`.
 

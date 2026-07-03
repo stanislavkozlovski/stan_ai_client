@@ -246,8 +246,10 @@ print(res.structured_output)
 GrokClient drives `grok -p --output-format ...`. Prompt delivery is handled
 transparently (direct arg or temp `--prompt-file` for long prompts). The JSON
 payload is thinner than Claude's (no cost/usage fields); `duration_ms` is
-provided client-side. Session support (`session_id`, `continue_last_session`)
-works well for automation.
+provided client-side. Structured mode accepts either Grok's envelope
+`structuredOutput` field or the raw validated JSON value returned by newer
+Grok builds. Session support (`session_id`, `continue_last_session`) works well
+for automation.
 
 ### Logging
 
