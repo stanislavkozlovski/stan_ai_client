@@ -54,6 +54,16 @@ REDACTED_ARG_FLAGS = {
     "--config",
     OUTPUT_SCHEMA_ARG_FLAG,
 }
+UNSUPPORTED_CODEX_SCHEMA_KEYWORDS = (
+    "allOf",
+    "oneOf",
+    "not",
+    "dependentRequired",
+    "dependentSchemas",
+    "if",
+    "then",
+    "else",
+)
 TRun = TypeVar("TRun")
 TStructured = TypeVar("TStructured")
 
@@ -800,7 +810,7 @@ def _iter_codex_output_schema_errors(
                 _iter_codex_output_schema_errors(item, path=f"{path}.items[{index}]")
             )
 
-    for keyword in ("allOf", "oneOf"):
+    for keyword in UNSUPPORTED_CODEX_SCHEMA_KEYWORDS:
         if keyword in node:
             errors.append(f"{path}.{keyword} is not supported")
 

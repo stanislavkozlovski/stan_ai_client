@@ -449,7 +449,8 @@ Required tests:
 - Codex structured mode supports resume by id and continue-last-session.
 - Codex structured mode validates schemas against the supported OpenAI
   structured-output subset before invoking the CLI, including rejecting
-  unsupported composition keywords such as `allOf` and `oneOf`.
+  unsupported schema keywords such as `allOf`, `oneOf`, `not`,
+  `dependentRequired`, `dependentSchemas`, `if`, `then`, and `else`.
 - Codex structured mode validates the final object locally.
 - Codex logs redact schema paths or contents where appropriate.
 - Provider-neutral exceptions catch both Claude and Codex failures.

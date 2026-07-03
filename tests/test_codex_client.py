@@ -521,6 +521,66 @@ def test_codex_run_structured_rejects_non_object_schema(
             },
             "oneOf",
         ),
+        (
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+                "additionalProperties": False,
+                "not": {"required": ["summary"]},
+            },
+            "not",
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+                "additionalProperties": False,
+                "dependentRequired": {"summary": ["detail"]},
+            },
+            "dependentRequired",
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+                "additionalProperties": False,
+                "dependentSchemas": {"summary": {"required": ["summary"]}},
+            },
+            "dependentSchemas",
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+                "additionalProperties": False,
+                "if": {"required": ["summary"]},
+            },
+            "if",
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+                "additionalProperties": False,
+                "then": {"required": ["summary"]},
+            },
+            "then",
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+                "additionalProperties": False,
+                "else": {"required": ["summary"]},
+            },
+            "else",
+        ),
     ],
 )
 def test_codex_run_structured_rejects_unsupported_schema_subset(

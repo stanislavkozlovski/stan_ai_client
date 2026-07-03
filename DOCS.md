@@ -358,8 +358,9 @@ and deletes the temporary schema file.
 Codex schemas are additionally checked against the OpenAI structured-output
 subset before the temporary file is created. The root schema must be an object,
 object properties must all be listed in `required`, and objects must set
-`additionalProperties: false`. Unsupported composition keywords such as
-`allOf` and `oneOf` are rejected locally.
+`additionalProperties: false`. Unsupported schema keywords such as `allOf`,
+`oneOf`, `not`, `dependentRequired`, `dependentSchemas`, `if`, `then`, and
+`else` are rejected locally.
 
 Codex structured mode supports `session_id` and `continue_last_session`;
 `--output-schema` is passed to `codex exec` before the `resume` subcommand.
