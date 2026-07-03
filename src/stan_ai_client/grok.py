@@ -22,7 +22,11 @@ from .exceptions import (
     GrokStructuredOutputValidationError,
     GrokTimeoutError,
 )
-from .grok_parser import summarize_grok_error_text, try_parse_grok_json_payload
+from .grok_parser import (
+    is_grok_error_payload,
+    summarize_grok_error_text,
+    try_parse_grok_json_payload,
+)
 from .rate_limits import is_rate_limit_text, parse_rate_limit_info
 from .schema import StructuredSchema
 from .transport import PreparedCommand, execute_command
@@ -446,6 +450,15 @@ class GrokClient:
             )
             self._log_protocol_error(error)
             raise error
+
+        if is_grok_error_payload(payload):
+            raise self._build_process_error(
+                metadata,
+                returncode=completed.returncode,
+                stdout=stdout,
+                stderr=stderr,
+                payload=payload,
+            )
 
         return completed, metadata, payload
 

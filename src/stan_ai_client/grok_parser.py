@@ -4,6 +4,32 @@ import json
 
 from .types import GrokJsonPayload
 
+GROK_ENVELOPE_METADATA_KEYS = {
+    "text",
+    "stopReason",
+    "stop_reason",
+    "sessionId",
+    "session_id",
+    "requestId",
+    "request_id",
+    "thought",
+    "duration_ms",
+}
+
+
+def is_grok_error_payload(payload: GrokJsonPayload) -> bool:
+    return payload.extras.get("type") == "error"
+
+
+def _is_grok_error_envelope(data: dict[str, object]) -> bool:
+    return data.get("type") == "error"
+
+
+def _is_grok_structured_envelope(data: dict[str, object]) -> bool:
+    if "structuredOutput" not in data and "structured_output" not in data:
+        return False
+    return any(key in data for key in GROK_ENVELOPE_METADATA_KEYS)
+
 
 def parse_grok_json_payload(
     text: str,
@@ -17,7 +43,7 @@ def parse_grok_json_payload(
     parsed = json.loads(raw)
     if raw_structured_output:
         if isinstance(parsed, dict) and (
-            "structuredOutput" in parsed or "structured_output" in parsed
+            _is_grok_error_envelope(parsed) or _is_grok_structured_envelope(parsed)
         ):
             return GrokJsonPayload.from_dict(parsed)
 
@@ -57,6 +83,10 @@ def summarize_grok_error_text(
     stdout: str,
     stderr: str,
 ) -> str:
+    if payload is not None and is_grok_error_payload(payload):
+        message = payload.extras.get("message")
+        if isinstance(message, str) and message:
+            return message
     if payload is not None and payload.text:
         return payload.text
     if stderr.strip():

@@ -114,6 +114,22 @@ def test_run_json_success(mock_exec: Mock) -> None:
 
 
 @patch("stan_ai_client.grok.execute_command")
+def test_run_json_error_envelope_raises_process_error(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = '{"type": "error", "message": "boom"}'
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    client = GrokClient()
+    with pytest.raises(GrokProcessError) as exc:
+        client.run_json("test")
+
+    assert "boom" in str(exc.value)
+    assert exc.value.returncode == 0
+    assert exc.value.payload is not None
+    assert exc.value.payload.extras["type"] == "error"
+
+
+@patch("stan_ai_client.grok.execute_command")
 def test_run_structured(mock_exec: Mock) -> None:
     payload = '{"text": "{\\"ans\\":42}", "stopReason": "EndTurn", "structuredOutput": {"ans": 42}}'
     mock_exec.return_value.stdout = payload
@@ -167,6 +183,26 @@ def test_run_structured_accepts_raw_schema_object(mock_exec: Mock) -> None:
     assert res.structured_output == {"ans": 42}
     assert res.payload.has_structured_output is True
     assert res.payload.structured_output == {"ans": 42}
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_preserves_raw_structured_output_key(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = '{"structuredOutput": "ok"}'
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"structuredOutput": {"type": "string"}},
+            "required": ["structuredOutput"],
+            "additionalProperties": False,
+        }
+    )
+    client = GrokClient()
+    res = client.run_structured("return structuredOutput", schema=schema)
+    assert res.structured_output == {"structuredOutput": "ok"}
+    assert res.payload.structured_output == {"structuredOutput": "ok"}
 
 
 @patch("stan_ai_client.grok.execute_command")

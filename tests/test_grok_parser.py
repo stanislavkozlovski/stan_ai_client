@@ -32,6 +32,25 @@ def test_parse_raw_structured_output() -> None:
     assert payload.extras == {}
 
 
+def test_parse_raw_structured_output_preserves_structured_output_key() -> None:
+    payload = parse_grok_json_payload(
+        '{"structuredOutput": "ok"}',
+        raw_structured_output=True,
+    )
+    assert payload.has_structured_output is True
+    assert payload.structured_output == {"structuredOutput": "ok"}
+
+
+def test_parse_raw_structured_output_accepts_envelope_with_metadata() -> None:
+    payload = parse_grok_json_payload(
+        '{"text": "{\\"x\\":1}", "structuredOutput": {"x": 1}}',
+        raw_structured_output=True,
+    )
+    assert payload.has_structured_output is True
+    assert payload.structured_output == {"x": 1}
+    assert payload.text == '{"x":1}'
+
+
 def test_parse_preserves_falsy_structured_output() -> None:
     payload = parse_grok_json_payload('{"text": "false", "structuredOutput": false}')
     assert payload.has_structured_output is True
@@ -60,6 +79,11 @@ def test_summarize_error_prefers_text() -> None:
         structured_output=None,
     )
     assert summarize_grok_error_text(payload=payload, stdout="", stderr="") == "result here"
+
+
+def test_summarize_error_prefers_error_envelope_message() -> None:
+    payload = parse_grok_json_payload('{"type": "error", "message": "boom"}')
+    assert summarize_grok_error_text(payload=payload, stdout="", stderr="") == "boom"
 
 
 def test_summarize_falls_back_to_stderr() -> None:
