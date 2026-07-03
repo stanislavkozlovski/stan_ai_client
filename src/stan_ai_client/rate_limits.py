@@ -41,7 +41,8 @@ def is_grok_rate_limit_text(text: str) -> bool:
     that the shared markers miss; everything else is already covered."""
     if is_rate_limit_text(text):
         return True
-    return "resource exhausted" in text.lower().replace("_", " ")
+    normalized = text.lower().replace("_", " ").replace("-", " ")
+    return "resource exhausted" in normalized
 
 
 def parse_rate_limit_info(

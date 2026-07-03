@@ -403,6 +403,7 @@ def test_error_raises_process_error(mock_exec: Mock) -> None:
     [
         "RESOURCE_EXHAUSTED quota exceeded",
         "Resource exhausted quota exceeded",
+        "resource-exhausted quota exceeded",
     ],
 )
 @patch("stan_ai_client.grok.execute_command")
