@@ -7,11 +7,6 @@ from .types import GrokJsonPayload
 def is_grok_error_payload(payload: GrokJsonPayload) -> bool:
     return payload.extras.get("type") == "error"
 
-
-def _is_grok_error_envelope(data: dict[str, object]) -> bool:
-    return data.get("type") == "error"
-
-
 def parse_grok_json_payload(
     text: str,
     *,
@@ -23,9 +18,6 @@ def parse_grok_json_payload(
 
     parsed = json.loads(raw)
     if raw_structured_output:
-        if isinstance(parsed, dict) and _is_grok_error_envelope(parsed):
-            return GrokJsonPayload.from_dict(parsed)
-
         return GrokJsonPayload(
             text=None,
             stop_reason=None,

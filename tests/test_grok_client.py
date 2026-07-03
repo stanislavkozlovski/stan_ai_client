@@ -9,6 +9,7 @@ from stan_ai_client import GrokClient, GrokRunOptions
 from stan_ai_client.exceptions import (
     GrokExecutableNotFoundError,
     GrokProcessError,
+    GrokStructuredOutputMissingError,
 )
 from stan_ai_client.schema import StructuredSchema
 from stan_ai_client.types import GrokJsonPayload
@@ -188,6 +189,39 @@ def test_run_structured_extracts_envelope_before_permissive_raw_schema(
 
 
 @patch("stan_ai_client.grok.execute_command")
+def test_run_structured_falls_back_to_raw_on_envelope_schema_mismatch(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = (
+        '{"stopReason": "domain-state", "sessionId": "domain-session", '
+        '"structuredOutput": "ok"}'
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "stopReason": {"type": "string"},
+                "sessionId": {"type": "string"},
+                "structuredOutput": {"type": "string"},
+            },
+            "required": ["stopReason", "sessionId", "structuredOutput"],
+            "additionalProperties": False,
+        }
+    )
+    client = GrokClient()
+    res = client.run_structured("return envelope-like fields", schema=schema)
+    assert res.structured_output == {
+        "stopReason": "domain-state",
+        "sessionId": "domain-session",
+        "structuredOutput": "ok",
+    }
+    assert res.payload.structured_output == res.structured_output
+
+
+@patch("stan_ai_client.grok.execute_command")
 def test_run_structured_accepts_falsy_output(mock_exec: Mock) -> None:
     payload = '{"text": "{}", "stopReason": "EndTurn", "structuredOutput": {}}'
     mock_exec.return_value.stdout = payload
@@ -221,6 +255,49 @@ def test_run_structured_accepts_raw_schema_object(mock_exec: Mock) -> None:
     assert res.structured_output == {"ans": 42}
     assert res.payload.has_structured_output is True
     assert res.payload.structured_output == {"ans": 42}
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_accepts_raw_error_variant(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = '{"type": "error", "message": "domain error"}'
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "type": {"const": "error"},
+                "message": {"type": "string"},
+            },
+            "required": ["type", "message"],
+            "additionalProperties": False,
+        }
+    )
+    client = GrokClient()
+    res = client.run_structured("return domain error", schema=schema)
+    assert res.structured_output == {"type": "error", "message": "domain error"}
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_rejects_envelope_without_structured_output(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = (
+        '{"text": "plain text", "stopReason": "EndTurn", "sessionId": "s1"}'
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict(
+        {"type": "object"}
+    )
+    client = GrokClient()
+    with pytest.raises(GrokStructuredOutputMissingError) as exc:
+        client.run_structured("return object", schema=schema)
+
+    assert exc.value.payload is not None
+    assert exc.value.payload.session_id == "s1"
 
 
 @patch("stan_ai_client.grok.execute_command")

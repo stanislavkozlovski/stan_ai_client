@@ -226,6 +226,23 @@ class GrokClient:
             raw_structured_output=True,
         )
 
+        envelope_payload = self._parse_envelope_payload(completed.stdout, metadata)
+        if (
+            envelope_payload is not None
+            and _is_grok_envelope_metadata_payload(envelope_payload)
+            and not envelope_payload.has_structured_output
+        ):
+            self.logger.debug("Grok structuredOutput missing")
+            missing_error = GrokStructuredOutputMissingError(
+                "Grok did not return structuredOutput in structured mode",
+                command=metadata,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+                payload=envelope_payload,
+            )
+            self._log_protocol_error(missing_error)
+            raise missing_error
+
         if not payload.has_structured_output:
             self.logger.debug("Grok structuredOutput missing")
             missing_error = GrokStructuredOutputMissingError(
@@ -240,7 +257,7 @@ class GrokClient:
 
         self.logger.debug("Grok structuredOutput present")
 
-        envelope_payload = self._parse_envelope_payload(completed.stdout, metadata)
+        envelope_validation_error: ValidationError | None = None
         if (
             envelope_payload is not None
             and _is_grok_structured_envelope_payload(envelope_payload)
@@ -248,11 +265,9 @@ class GrokClient:
             try:
                 structured_output = schema.validate_response(envelope_payload.structured_output)
             except ValidationError as exc:
-                self._raise_structured_validation_error(
-                    schema_error=exc,
-                    completed=completed,
-                    metadata=metadata,
-                    payload=envelope_payload,
+                envelope_validation_error = exc
+                self.logger.debug(
+                    "Grok envelope structuredOutput validation failed; trying raw JSON value"
                 )
             else:
                 self.logger.debug("Grok envelope structuredOutput validation succeeded")
@@ -267,13 +282,21 @@ class GrokClient:
         try:
             structured_output = schema.validate_response(payload.structured_output)
         except ValidationError as exc:
+            if envelope_payload is not None and is_grok_error_payload(envelope_payload):
+                raise self._build_process_error(
+                    metadata,
+                    returncode=completed.returncode,
+                    stdout=completed.stdout,
+                    stderr=completed.stderr,
+                    payload=envelope_payload,
+                )
             payload, structured_output = self._validate_envelope_structured_output_or_raise(
                 schema=schema,
                 completed=completed,
                 metadata=metadata,
                 raw_payload=payload,
                 envelope_payload=envelope_payload,
-                validation_error=exc,
+                validation_error=envelope_validation_error or exc,
             )
 
         self.logger.debug("Grok structuredOutput validation succeeded")
@@ -760,7 +783,11 @@ def _redact_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _is_grok_structured_envelope_payload(payload: GrokJsonPayload) -> bool:
-    return payload.has_structured_output and any(
+    return payload.has_structured_output and _is_grok_envelope_metadata_payload(payload)
+
+
+def _is_grok_envelope_metadata_payload(payload: GrokJsonPayload) -> bool:
+    return any(
         value is not None
         for value in (
             payload.stop_reason,
