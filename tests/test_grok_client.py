@@ -19,7 +19,7 @@ from stan_ai_client.types import GrokJsonPayload
 def test_grok_client_init_defaults() -> None:
     client = GrokClient()
     assert client.executable == "grok"
-    assert client.default_model == "grok-build"
+    assert client.default_model == "grok-4.5"
     assert client.default_timeout_seconds == 120.0
 
 
@@ -42,7 +42,7 @@ def test_run_text_success(mock_exec: Mock) -> None:
     assert "grok" in " ".join(argv)
     assert "--no-auto-update" in argv
     assert "--model" in argv
-    assert argv[argv.index("--model") + 1] == "grok-build"
+    assert argv[argv.index("--model") + 1] == "grok-4.5"
 
 
 @patch("stan_ai_client.grok.execute_command")

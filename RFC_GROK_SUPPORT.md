@@ -121,7 +121,7 @@ These differences are fundamental to the CLI contract and must be accepted (or w
 
 - **Error surface during startup**: Invalid flags or configuration errors can emit usage text or error messages before producing the expected JSON. The parser must be defensive.
 
-- **Model availability**: The Grok Build TUI primarily exposes focused models (e.g. `grok-build`, `grok-composer-2.5-fast`). The default will be chosen sensibly (matching what `grok` uses when no `-m` is given).
+- **Model availability**: The Grok Build TUI and xAI API model names can change over time. The client defaults to `grok-4.5` and still accepts explicit model overrides through `GrokRunOptions(model=...)` or `GrokClient(default_model=...)`.
 
 These gaps will be clearly documented. `GrokJsonPayload` will be a simpler dataclass than `ClaudeJsonPayload` and will document which fields are always/never present.
 

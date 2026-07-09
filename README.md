@@ -227,7 +227,7 @@ Structured Codex runs may also resume existing sessions with `session_id` or
 ```python
 from stan_ai_client import GrokClient, GrokRunOptions, StructuredSchema
 
-client = GrokClient()  # defaults to model="grok-build"
+client = GrokClient()  # defaults to model="grok-4.5"
 
 result = client.run_text("Reply with the single word: ok")
 print(result.text)
