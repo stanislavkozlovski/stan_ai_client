@@ -158,7 +158,7 @@ class GrokClient:
         self,
         *,
         executable: str = "grok",
-        default_model: str = "grok-build",
+        default_model: str = "grok-4.5",
         default_effort: Literal["low", "medium", "high", "max"] | None = None,
         default_timeout_seconds: float = 120.0,
         default_options: GrokRunOptions | None = None,
@@ -168,7 +168,7 @@ class GrokClient:
 ```
 
 GrokClient drives `grok --no-auto-update -p`. It always passes `--model`
-(defaulting to the CLI's common default of `grok-build`). Prompt delivery is
+(defaulting to xAI's current Grok model, `grok-4.5`). Prompt delivery is
 handled transparently inside the client.
 
 ## StructuredSchema
