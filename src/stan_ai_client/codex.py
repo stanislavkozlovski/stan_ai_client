@@ -36,12 +36,12 @@ from .types import (
     CodexJsonPayload,
     CodexJsonRunResult,
     CodexPermissionMode,
+    CodexReasoningEffort,
     CodexRunOptions,
     CodexStructuredRunResult,
     CommandMetadata,
     InputMode,
     RateLimitRetryPolicy,
-    ReasoningEffort,
     TextRunResult,
 )
 
@@ -72,7 +72,7 @@ TStructured = TypeVar("TStructured")
 class ResolvedCodexRunOptions:
     cwd: str | Path | None
     model: str
-    reasoning_effort: ReasoningEffort
+    reasoning_effort: CodexReasoningEffort
     timeout_seconds: float
     input_mode: InputMode
     permission_mode: CodexPermissionMode
@@ -94,8 +94,8 @@ class CodexClient:
         self,
         *,
         executable: str = "codex",
-        default_model: str = "gpt-5.5",
-        default_reasoning_effort: ReasoningEffort = "medium",
+        default_model: str = "gpt-5.6-sol",
+        default_reasoning_effort: CodexReasoningEffort = "medium",
         default_permission_mode: CodexPermissionMode = "bypassPermissions",
         default_timeout_seconds: float = 120.0,
         default_options: CodexRunOptions | None = None,

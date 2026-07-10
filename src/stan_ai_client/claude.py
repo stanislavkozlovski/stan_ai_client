@@ -26,9 +26,9 @@ from .rate_limits import is_rate_limit_text, parse_rate_limit_info
 from .schema import StructuredSchema
 from .transport import PreparedCommand, execute_command
 from .types import (
+    ClaudeEffort,
     ClaudeJsonPayload,
     CommandMetadata,
-    Effort,
     JsonRunResult,
     RateLimitRetryPolicy,
     RunOptions,
@@ -52,7 +52,7 @@ TStructured = TypeVar("TStructured")
 class ResolvedRunOptions:
     cwd: str | Path | None
     model: str
-    effort: Effort
+    effort: ClaudeEffort
     timeout_seconds: float
     input_mode: str
     allowed_tools: tuple[str, ...] | None
@@ -76,7 +76,7 @@ class ClaudeCodeClient:
         *,
         executable: str = "claude",
         default_model: str = "claude-opus-4-8",
-        default_effort: Effort = "max",
+        default_effort: ClaudeEffort = "max",
         default_timeout_seconds: float = 120.0,
         default_options: RunOptions | None = None,
         logger: logging.Logger | None = None,

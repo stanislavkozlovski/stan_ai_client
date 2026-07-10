@@ -21,6 +21,7 @@ from .rate_limits import is_rate_limit_text, parse_rate_limit_info
 from .schema import StructuredSchema
 from .transport import PreparedCommand, execute_command
 from .types import (
+    ClaudeEffort,
     ClaudeJsonPayload,
     CommandMetadata,
     Effort,
@@ -34,6 +35,7 @@ from .types import (
 __all__ = [
     "ClaudeExecutableNotFoundError",
     "ClaudeCodeClient",
+    "ClaudeEffort",
     "ClaudeJsonPayload",
     "ClaudeProcessError",
     "ClaudeProtocolError",

@@ -4,8 +4,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Generic, Literal, Mapping, TypeVar
 
-Effort = Literal["low", "medium", "high", "max"]
-ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
+ClaudeEffort = Literal["low", "medium", "high", "max"]
+CodexReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh", "max"]
+GrokEffort = Literal["low", "medium", "high", "max"]
+
+# Backward-compatible aliases. New code should use the provider-specific names.
+Effort = ClaudeEffort
+ReasoningEffort = CodexReasoningEffort
 PermissionMode = Literal[
     "acceptEdits",
     "bypassPermissions",
@@ -37,7 +42,7 @@ def _first_present(data: Mapping[str, Any], *keys: str) -> Any | None:
 class RunOptions:
     cwd: str | Path | None = None
     model: str | None = None
-    effort: Effort | None = None
+    effort: ClaudeEffort | None = None
     timeout_seconds: float | None = None
     input_mode: InputMode = "stdin"
     allowed_tools: tuple[str, ...] | None = None
@@ -59,7 +64,7 @@ class RunOptions:
 class CodexRunOptions:
     cwd: str | Path | None = None
     model: str | None = None
-    reasoning_effort: ReasoningEffort | None = None
+    reasoning_effort: CodexReasoningEffort | None = None
     timeout_seconds: float | None = None
     input_mode: InputMode | None = None
     permission_mode: CodexPermissionMode | None = None
@@ -86,7 +91,7 @@ class GrokRunOptions:
 
     cwd: str | Path | None = None
     model: str | None = None
-    effort: Effort | None = None
+    effort: GrokEffort | None = None
     timeout_seconds: float | None = None
     permission_mode: GrokPermissionMode | None = None
     session_id: str | None = None
