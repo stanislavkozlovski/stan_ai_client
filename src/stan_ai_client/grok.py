@@ -34,7 +34,7 @@ from .schema import StructuredSchema
 from .transport import PreparedCommand, execute_command
 from .types import (
     CommandMetadata,
-    Effort,
+    GrokEffort,
     GrokJsonPayload,
     GrokJsonRunResult,
     GrokPermissionMode,
@@ -62,7 +62,7 @@ TStructured = TypeVar("TStructured")
 class ResolvedGrokRunOptions:
     cwd: str | Path | None
     model: str
-    effort: Effort | None
+    effort: GrokEffort | None
     timeout_seconds: float
     permission_mode: GrokPermissionMode | None
     session_id: str | None
@@ -89,7 +89,7 @@ class GrokClient:
         *,
         executable: str = "grok",
         default_model: str = "grok-4.5",
-        default_effort: Effort | None = None,
+        default_effort: GrokEffort | None = None,
         default_timeout_seconds: float = 120.0,
         default_options: GrokRunOptions | None = None,
         logger: logging.Logger | None = None,

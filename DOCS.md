@@ -68,6 +68,25 @@ print(__version__)
 
 ## Main API
 
+### Provider-specific effort types
+
+Effort values are named by provider so signatures and editor hints do not imply
+that values can be exchanged across CLIs:
+
+```python
+ClaudeEffort = Literal["low", "medium", "high", "max"]
+CodexReasoningEffort = Literal[
+    "minimal", "low", "medium", "high", "xhigh", "max"
+]
+GrokEffort = Literal["low", "medium", "high", "max"]
+```
+
+These types are exported from `stan_ai_client`. The generic `Effort` and
+`ReasoningEffort` names remain available from `stan_ai_client.types` for
+backward compatibility, but new code should use the provider-specific names.
+The selected provider CLI remains responsible for validating whether a specific
+model supports a value.
+
 ### `ClaudeCodeClient`
 
 ```python
@@ -77,7 +96,7 @@ class ClaudeCodeClient:
         *,
         executable: str = "claude",
         default_model: str = "claude-opus-4-8",
-        default_effort: Literal["low", "medium", "high", "max"] = "max",
+        default_effort: ClaudeEffort = "max",
         default_timeout_seconds: float = 120.0,
         default_options: RunOptions | None = None,
         logger: logging.Logger | None = None,
@@ -115,7 +134,7 @@ class CodexClient:
         *,
         executable: str = "codex",
         default_model: str = "gpt-5.6-sol",
-        default_reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh", "max"] = "medium",
+        default_reasoning_effort: CodexReasoningEffort = "medium",
         default_permission_mode: Literal["default", "bypassPermissions"] = "bypassPermissions",
         default_timeout_seconds: float = 120.0,
         default_options: CodexRunOptions | None = None,
@@ -159,7 +178,7 @@ class GrokClient:
         *,
         executable: str = "grok",
         default_model: str = "grok-4.5",
-        default_effort: Literal["low", "medium", "high", "max"] | None = None,
+        default_effort: GrokEffort | None = None,
         default_timeout_seconds: float = 120.0,
         default_options: GrokRunOptions | None = None,
         logger: logging.Logger | None = None,
@@ -210,7 +229,7 @@ structured mode writes `cli_json` to a temporary file and passes the path with
 class RunOptions:
     cwd: str | Path | None = None
     model: str | None = None
-    effort: Effort | None = None
+    effort: ClaudeEffort | None = None
     timeout_seconds: float | None = None
     input_mode: Literal["stdin", "argv"] = "stdin"
     allowed_tools: tuple[str, ...] | None = None
@@ -249,7 +268,7 @@ Important mappings:
 class CodexRunOptions:
     cwd: str | Path | None = None
     model: str | None = None
-    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh", "max"] | None = None
+    reasoning_effort: CodexReasoningEffort | None = None
     timeout_seconds: float | None = None
     input_mode: Literal["stdin", "argv"] | None = None
     permission_mode: Literal["default", "bypassPermissions"] | None = None
@@ -296,7 +315,7 @@ Important mappings:
 class GrokRunOptions:
     cwd: str | Path | None = None
     model: str | None = None
-    effort: Literal["low", "medium", "high", "max"] | None = None
+    effort: GrokEffort | None = None
     timeout_seconds: float | None = None
     permission_mode: Literal[
         "acceptEdits", "bypassPermissions", "default", "dontAsk", "plan"

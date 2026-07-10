@@ -314,8 +314,11 @@ Top-level exports:
 from stan_ai_client import (
     __version__,
     ClaudeCodeClient,
+    ClaudeEffort,
     CodexClient,
+    CodexReasoningEffort,
     GrokClient,
+    GrokEffort,
     RunOptions,
     CodexRunOptions,
     GrokRunOptions,
@@ -360,6 +363,11 @@ from stan_ai_client import (
     parse_rate_limit_info,
 )
 ```
+
+Effort types are provider-specific: use `ClaudeEffort`,
+`CodexReasoningEffort`, or `GrokEffort` when annotating configuration. This
+keeps each CLI's vocabulary explicit while the provider validates support for
+the selected model.
 
 ## Supported Features
 
