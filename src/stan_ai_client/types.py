@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Generic, Literal, Mapping, TypeVar
 
 Effort = Literal["low", "medium", "high", "max"]
-ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
+ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh", "max"]
 PermissionMode = Literal[
     "acceptEdits",
     "bypassPermissions",

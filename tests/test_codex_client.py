@@ -76,7 +76,7 @@ def test_codex_run_text_uses_stdin_and_default_bypass(
     )
     monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
 
-    client = CodexClient(default_model="gpt-5.5", default_reasoning_effort="xhigh")
+    client = CodexClient()
     result = client.run_text("hello")
 
     argv = recorder.calls[0]["argv"]
@@ -85,8 +85,31 @@ def test_codex_run_text_uses_stdin_and_default_bypass(
     assert argv[-1] == "-"
     assert recorder.calls[0]["input"] == "hello"
     assert "--dangerously-bypass-approvals-and-sandbox" in argv
-    assert argv[argv.index("--model") + 1] == "gpt-5.5"
-    assert 'model_reasoning_effort="xhigh"' in argv
+    assert argv[argv.index("--model") + 1] == "gpt-5.6-sol"
+    assert 'model_reasoning_effort="medium"' in argv
+
+
+def test_codex_client_init_defaults() -> None:
+    client = CodexClient()
+
+    assert client.executable == "codex"
+    assert client.default_model == "gpt-5.6-sol"
+    assert client.default_reasoning_effort == "medium"
+    assert client.default_timeout_seconds == 120.0
+
+
+def test_codex_run_text_accepts_max_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="done\n", stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    client = CodexClient()
+    client.run_text("hello", options=CodexRunOptions(reasoning_effort="max"))
+
+    assert 'model_reasoning_effort="max"' in recorder.calls[0]["argv"]
 
 
 def test_codex_run_text_accepts_minimal_reasoning_effort(

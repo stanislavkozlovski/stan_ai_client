@@ -114,8 +114,8 @@ class CodexClient:
         self,
         *,
         executable: str = "codex",
-        default_model: str = "gpt-5.5",
-        default_reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"] = "medium",
+        default_model: str = "gpt-5.6-sol",
+        default_reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh", "max"] = "medium",
         default_permission_mode: Literal["default", "bypassPermissions"] = "bypassPermissions",
         default_timeout_seconds: float = 120.0,
         default_options: CodexRunOptions | None = None,
@@ -249,7 +249,7 @@ Important mappings:
 class CodexRunOptions:
     cwd: str | Path | None = None
     model: str | None = None
-    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
+    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh", "max"] | None = None
     timeout_seconds: float | None = None
     input_mode: Literal["stdin", "argv"] | None = None
     permission_mode: Literal["default", "bypassPermissions"] | None = None
