@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import tempfile
 import time
 from dataclasses import dataclass, replace
@@ -996,6 +997,17 @@ def _schema_instance_object_keys(
     required = schema.get("required")
     if isinstance(required, list):
         keys.update(key for key in required if isinstance(key, str))
+
+    pattern_properties = schema.get("patternProperties")
+    if isinstance(pattern_properties, dict):
+        for pattern in pattern_properties:
+            if not isinstance(pattern, str):
+                continue
+            try:
+                compiled_pattern = re.compile(pattern)
+            except re.error:
+                continue
+            keys.update(key for key in instance if compiled_pattern.search(key))
 
     referenced = _resolve_local_schema_ref(root, schema.get("$ref"))
     if referenced is not None:

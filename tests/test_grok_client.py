@@ -657,6 +657,48 @@ def test_raw_schema_with_cancelled_stop_reason_is_not_control_metadata(
     assert result.payload.structured_output == raw_value
 
 
+@patch("stan_ai_client.grok.execute_command")
+def test_pattern_properties_raw_cancellation_schema_is_preserved(
+    mock_exec: Mock,
+) -> None:
+    raw_value = {"stopReason": "Cancelled"}
+    mock_exec.return_value.stdout = json.dumps(raw_value)
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "patternProperties": {
+                "^stopReason$": {"const": "Cancelled"},
+            },
+            "additionalProperties": False,
+        }
+    )
+    result = GrokClient().run_structured("return domain state", schema=schema)
+
+    assert result.structured_output == raw_value
+    assert result.payload.structured_output == raw_value
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_nonmatching_pattern_properties_do_not_authorize_raw_recovery(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps({"stopReason": "Cancelled"})
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "patternProperties": {"^domain_": {"type": "string"}},
+        }
+    )
+    with pytest.raises(GrokCancelledError):
+        GrokClient().run_structured("return domain state", schema=schema)
+
+
 @pytest.mark.parametrize("identifier", ["sessionId", "requestId"])
 @patch("stan_ai_client.grok.execute_command")
 def test_raw_schema_with_cancelled_stop_reason_and_identifier_is_preserved(
