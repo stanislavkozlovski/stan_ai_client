@@ -11,6 +11,10 @@ from .types import GrokJsonPayload
 _JSON_VALUE_START_CHARS = '{["-0123456789'
 _JSON_LITERALS = ("true", "false", "null")
 _CANCELLED_STOP_REASONS = frozenset({"canceled", "cancelled"})
+_CANCELLATION_STOP_REASON_KEYS = frozenset({"stopReason", "stop_reason"})
+_CANCELLATION_CATEGORY_KEYS = frozenset(
+    {"cancellationCategory", "cancellation_category"}
+)
 
 
 def is_grok_error_payload(payload: GrokJsonPayload) -> bool:
@@ -60,15 +64,24 @@ def has_grok_cancelled_stop_reason(payload: GrokJsonPayload) -> bool:
     )
 
 
-def is_grok_cancelled_payload(payload: GrokJsonPayload) -> bool:
-    """True when structured output reports a cancelled turn.
+def _cancellation_signal_keys(payload: GrokJsonPayload) -> frozenset[str]:
+    """Raw field aliases for the signal that classified this cancellation."""
+    if has_grok_cancelled_stop_reason(payload):
+        return _CANCELLATION_STOP_REASON_KEYS
+    if _has_cancellation_metadata(payload):
+        return _CANCELLATION_CATEGORY_KEYS
+    return frozenset()
 
-    Grok can omit every optional envelope field on a zero-exit cancellation. A
-    raw schema value may also use ``stopReason`` as domain data, so the client
-    gives an explicitly matching raw schema one guarded recovery attempt before
-    it raises the cancellation.
+
+def is_grok_cancelled_payload(payload: GrokJsonPayload) -> bool:
+    """True when Grok reports a cancelled turn.
+
+    Grok can omit ``stopReason`` while still emitting cancellation-only metadata.
+    A raw schema value may also use these fields as domain data, so the structured
+    client gives an explicitly matching raw schema one guarded recovery attempt
+    before it raises the cancellation.
     """
-    return has_grok_cancelled_stop_reason(payload)
+    return bool(_cancellation_signal_keys(payload))
 
 
 def is_grok_structured_envelope(payload: GrokJsonPayload) -> bool:
@@ -217,8 +230,9 @@ class GrokStructuredOutcome:
 
     - ``"error"``: ``payload`` is a Grok ``{"type": "error"}`` envelope; raise a
       process error even when the CLI exited ``0``.
-    - ``"cancelled"``: the envelope's stop reason says the turn was cancelled;
-      raise a cancellation error unless an explicit raw candidate validates.
+    - ``"cancelled"``: the envelope reports a cancelled turn; raise a
+      cancellation error unless an explicit raw candidate validates and its
+      schema models the signal that caused the classification.
     - ``"malformed"``: Grok returned structured text that is not exactly one JSON
       value. ``json_value_count`` distinguishes concatenated roots when known. A
       complete outer raw value remains a candidate when only its envelope-like
@@ -235,6 +249,8 @@ class GrokStructuredOutcome:
     ``explicit_raw_candidates`` are complete outer objects that resemble control
     envelopes. The client tries them only when the schema explicitly models one
     of their keys, preventing permissive schemas from swallowing real envelopes.
+    ``explicit_raw_recovery_keys`` can narrow that evidence to a protocol field
+    group, as cancellation outcomes do for their stop reason or category.
     Explicit errors and malformed stdout leave them empty because no eligible
     value survived intact.
     """
@@ -243,6 +259,7 @@ class GrokStructuredOutcome:
     payload: GrokJsonPayload
     candidates: tuple[tuple[GrokJsonPayload, Any], ...] = ()
     explicit_raw_candidates: tuple[tuple[GrokJsonPayload, Any], ...] = ()
+    explicit_raw_recovery_keys: frozenset[str] | None = None
     detail: str | None = None
     json_value_count: int | None = None
 
@@ -289,6 +306,7 @@ def classify_grok_structured_stdout(stdout: str) -> GrokStructuredOutcome | None
             "cancelled",
             envelope,
             explicit_raw_candidates=raw_candidates,
+            explicit_raw_recovery_keys=_cancellation_signal_keys(envelope),
         )
 
     if (

@@ -29,7 +29,7 @@ from .exceptions import (
 from .grok_parser import (
     GrokStructuredOutcome,
     classify_grok_structured_stdout,
-    has_grok_cancelled_stop_reason,
+    is_grok_cancelled_payload,
     is_grok_error_payload,
     summarize_grok_error_text,
     try_parse_grok_json_payload,
@@ -368,7 +368,11 @@ class GrokClient:
                 structured_output = schema.validate_response(value)
             except ValidationError:
                 continue
-            if not self._schema_mentions_raw_value_keys(schema, value):
+            if not self._schema_mentions_raw_value_keys(
+                schema,
+                value,
+                recovery_keys=outcome.explicit_raw_recovery_keys,
+            ):
                 continue
             return self._stamp(candidate_payload, metadata), structured_output
         return None
@@ -377,6 +381,8 @@ class GrokClient:
     def _schema_mentions_raw_value_keys(
         schema: StructuredSchema[Any],
         value: Any,
+        *,
+        recovery_keys: frozenset[str] | None,
     ) -> bool:
         if not isinstance(value, dict):
             return False
@@ -401,6 +407,8 @@ class GrokClient:
             instance=value,
             branch_is_valid=branch_is_valid,
         )
+        if recovery_keys is not None:
+            mentioned_keys.intersection_update(recovery_keys)
         return bool(mentioned_keys.intersection(value))
 
     def _validate_structured_candidates(
@@ -747,7 +755,7 @@ class GrokClient:
                 payload=payload,
             )
 
-        if has_grok_cancelled_stop_reason(payload):
+        if is_grok_cancelled_payload(payload):
             cancelled_error = self._build_cancelled_error(
                 metadata,
                 stdout=stdout,

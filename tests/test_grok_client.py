@@ -622,6 +622,28 @@ def test_run_structured_classifies_stop_reason_only_cancellation(
     assert exc.value.request_id is None
 
 
+@patch("stan_ai_client.grok.execute_command")
+def test_unrelated_schema_key_does_not_recover_cancellation(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "text": "",
+            "stopReason": "Cancelled",
+            "sessionId": "s1",
+        }
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+        }
+    )
+    with pytest.raises(GrokCancelledError):
+        GrokClient().run_structured("return object", schema=schema)
+
+
 @pytest.mark.parametrize(
     "raw_value",
     [
@@ -697,6 +719,29 @@ def test_nonmatching_pattern_properties_do_not_authorize_raw_recovery(
     )
     with pytest.raises(GrokCancelledError):
         GrokClient().run_structured("return domain state", schema=schema)
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_raw_cancellation_category_schema_is_preserved(mock_exec: Mock) -> None:
+    raw_value = {"cancellationCategory": "domain-state"}
+    mock_exec.return_value.stdout = json.dumps(raw_value)
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "cancellationCategory": {"const": "domain-state"},
+            },
+            "required": ["cancellationCategory"],
+            "additionalProperties": False,
+        }
+    )
+    result = GrokClient().run_structured("return domain state", schema=schema)
+
+    assert result.structured_output == raw_value
+    assert result.payload.structured_output == raw_value
 
 
 @pytest.mark.parametrize("identifier", ["sessionId", "requestId"])
@@ -897,6 +942,53 @@ def test_run_json_classifies_cancelled_envelope_without_optional_metadata(
     assert exc.value.session_id is None
     assert exc.value.request_id is None
     assert exc.value.cancellation_category is None
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_json_classifies_cancellation_category_without_stop_reason(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "text": "",
+            "sessionId": "s1",
+            "cancellationCategory": "permission_cancelled",
+        }
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    with pytest.raises(GrokCancelledError) as exc:
+        GrokClient().run_json("test")
+
+    assert exc.value.stop_reason is None
+    assert exc.value.session_id == "s1"
+    assert exc.value.cancellation_category == "permission_cancelled"
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_classifies_cancellation_category_without_stop_reason(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "text": "",
+            "sessionId": "s1",
+            "cancellationCategory": "permission_cancelled",
+        }
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict(
+        {"type": "object"}
+    )
+    with pytest.raises(GrokCancelledError) as exc:
+        GrokClient().run_structured("return object", schema=schema)
+
+    assert exc.value.stop_reason is None
+    assert exc.value.session_id == "s1"
+    assert exc.value.cancellation_category == "permission_cancelled"
 
 
 @patch("stan_ai_client.grok.execute_command")
