@@ -11,6 +11,35 @@ def is_grok_error_payload(payload: GrokJsonPayload) -> bool:
     return payload.extras.get("type") == "error"
 
 
+def has_grok_result_envelope_evidence(payload: GrokJsonPayload) -> bool:
+    """True when fields beyond ambiguous schema keys identify a result envelope."""
+    return bool(
+        payload.text is not None
+        or payload.session_id is not None
+        or payload.request_id is not None
+        or payload.cancellation_category is not None
+    )
+
+
+def is_grok_cancelled_payload(payload: GrokJsonPayload) -> bool:
+    """True for a Grok result envelope whose turn ended by cancellation.
+
+    Structured schema values can legitimately contain a ``stopReason`` key, so
+    require additional envelope evidence before treating that value as control
+    metadata.
+    """
+    if payload.stop_reason is None or payload.stop_reason.casefold() not in {
+        "canceled",
+        "cancelled",
+    }:
+        return False
+    return bool(
+        payload.session_id is not None
+        or payload.request_id is not None
+        or payload.cancellation_category is not None
+    )
+
+
 def is_grok_envelope_metadata(payload: GrokJsonPayload) -> bool:
     """True when the payload carries Grok envelope metadata (not schema data)."""
     return any(
@@ -83,6 +112,10 @@ class GrokStructuredOutcome:
 
     - ``"error"``: ``payload`` is a Grok ``{"type": "error"}`` envelope; raise a
       process error even when the CLI exited ``0``.
+    - ``"cancelled"``: the envelope's stop reason says the turn was cancelled;
+      raise a cancellation error before attempting schema validation.
+    - ``"malformed"``: Grok returned structured text that is not exactly one JSON
+      value. ``json_value_count`` distinguishes concatenated roots when known.
     - ``"missing"``: ``payload`` is an envelope that produced no structuredOutput;
       raise the structured-output-missing error unless an explicit raw candidate
       validates against the caller schema.
@@ -92,9 +125,60 @@ class GrokStructuredOutcome:
       its payload is returned.
     """
 
-    kind: Literal["error", "missing", "validate"]
+    kind: Literal["cancelled", "error", "malformed", "missing", "validate"]
     payload: GrokJsonPayload
     candidates: tuple[tuple[GrokJsonPayload, Any], ...] = ()
+    detail: str | None = None
+    json_value_count: int | None = None
+
+
+def _decode_json_sequence(raw: str) -> tuple[tuple[Any, ...], json.JSONDecodeError | None]:
+    """Decode every whitespace-separated top-level JSON value in ``raw``."""
+    decoder = json.JSONDecoder()
+    values: list[Any] = []
+    index = 0
+    while index < len(raw):
+        while index < len(raw) and raw[index].isspace():
+            index += 1
+        if index == len(raw):
+            break
+        try:
+            value, index = decoder.raw_decode(raw, index)
+        except json.JSONDecodeError as exc:
+            return tuple(values), exc
+        values.append(value)
+    return tuple(values), None
+
+
+def _payload_for_json_value(value: Any) -> GrokJsonPayload:
+    if isinstance(value, dict):
+        envelope = GrokJsonPayload.from_dict(value)
+        if is_grok_envelope_metadata(envelope) or is_grok_error_payload(envelope):
+            return envelope
+    return raw_grok_structured_payload(value)
+
+
+def _malformed_json_sequence_outcome(
+    values: tuple[Any, ...],
+    error: json.JSONDecodeError | None,
+) -> GrokStructuredOutcome | None:
+    if not values:
+        return None
+    count = len(values)
+    if count == 1:
+        if error is None:
+            return None
+        detail = "Grok returned one top-level JSON value"
+    else:
+        detail = f"Grok returned {count} concatenated top-level JSON values"
+    if error is not None:
+        detail += f" followed by malformed JSON at character {error.pos}"
+    return GrokStructuredOutcome(
+        "malformed",
+        _payload_for_json_value(values[0]),
+        detail=detail,
+        json_value_count=count,
+    )
 
 
 def classify_grok_structured_stdout(stdout: str) -> GrokStructuredOutcome | None:
@@ -110,14 +194,55 @@ def classify_grok_structured_stdout(stdout: str) -> GrokStructuredOutcome | None
         return None
     try:
         value = json.loads(raw)
-    except (ValueError, json.JSONDecodeError):
-        return None
+    except json.JSONDecodeError:
+        values, sequence_error = _decode_json_sequence(raw)
+        return _malformed_json_sequence_outcome(values, sequence_error)
 
     raw_payload = raw_grok_structured_payload(value)
     envelope = GrokJsonPayload.from_dict(value) if isinstance(value, dict) else None
 
     if envelope is not None and is_grok_error_payload(envelope):
         return GrokStructuredOutcome("error", envelope)
+    if envelope is not None and is_grok_cancelled_payload(envelope):
+        return GrokStructuredOutcome("cancelled", envelope)
+
+    if (
+        envelope is not None
+        and has_grok_result_envelope_evidence(envelope)
+        and envelope.has_structured_output
+        and envelope.structured_output is None
+    ):
+        if envelope.text is None or not envelope.text.strip():
+            return GrokStructuredOutcome(
+                "missing",
+                envelope,
+                ((raw_payload, raw_payload.structured_output),),
+            )
+
+        text_values, text_error = _decode_json_sequence(envelope.text)
+        malformed = _malformed_json_sequence_outcome(text_values, text_error)
+        if malformed is not None:
+            return GrokStructuredOutcome(
+                "malformed",
+                envelope,
+                detail=malformed.detail,
+                json_value_count=malformed.json_value_count,
+            )
+        if text_error is not None or len(text_values) != 1:
+            return GrokStructuredOutcome(
+                "missing",
+                envelope,
+                ((raw_payload, raw_payload.structured_output),),
+            )
+        return GrokStructuredOutcome(
+            "validate",
+            envelope,
+            (
+                (envelope, text_values[0]),
+                (raw_payload, raw_payload.structured_output),
+            ),
+        )
+
     if envelope is not None and is_grok_structured_output_failure(envelope):
         return GrokStructuredOutcome(
             "missing",

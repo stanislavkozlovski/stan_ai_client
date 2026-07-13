@@ -244,6 +244,11 @@ print(r.payload.session_id)
 schema = StructuredSchema.from_dict({"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": False})
 res = client.run_structured("Return {ok: true}", schema=schema)
 print(res.structured_output)
+
+# Limit a headless review to read-only built-in tools. This changes which
+# tools Grok can see; --allow/--deny permission rules do not.
+options = GrokRunOptions(tools=("read_file", "grep", "list_dir"))
+res = client.run_structured("Review this repository", schema=schema, options=options)
 ```
 
 GrokClient drives `grok --no-auto-update -p --output-format ...`. Prompt
@@ -254,6 +259,17 @@ envelope `structuredOutput` field or the raw validated JSON value returned by
 newer Grok builds, while Grok `{"type": "error"}` envelopes remain process
 failures. Session support (`session_id`, `continue_last_session`) works well for
 automation.
+
+Cancelled JSON turns raise `GrokCancelledError` even when the CLI exits `0`.
+Malformed structured text, including concatenated JSON roots, raises
+`GrokMalformedStructuredOutputError`; raw output remains on the exception while
+its `detail` and `json_value_count` fields are safe for routine diagnostics.
+
+Grok permission rules and built-in tool filtering are separate APIs:
+`permission_allow_rules` / `permission_deny_rules` map to `--allow` / `--deny`,
+while `tools` / `excluded_tools` map to `--tools` / `--disallowed-tools`.
+The old `allowed_tools` / `disallowed_tools` names remain deprecated aliases for
+permission rules so existing callers keep their behavior.
 
 ### Logging
 
@@ -339,18 +355,28 @@ from stan_ai_client import (
     AIClientTimeoutError,
     ClaudeCodeError,
     CodexCodeError,
+    GrokCodeError,
     ClaudeExecutableNotFoundError,
     CodexExecutableNotFoundError,
+    GrokExecutableNotFoundError,
     ClaudeLimitError,
     CodexLimitError,
     ClaudeTimeoutError,
     CodexTimeoutError,
+    GrokTimeoutError,
     ClaudeProcessError,
     CodexProcessError,
+    GrokProcessError,
     ClaudeProtocolError,
     CodexProtocolError,
+    GrokProtocolError,
     ClaudeRateLimitError,
     CodexRateLimitError,
+    GrokRateLimitError,
+    GrokCancelledError,
+    GrokMalformedStructuredOutputError,
+    GrokStructuredOutputMissingError,
+    GrokStructuredOutputValidationError,
     StructuredSchemaValidationError,
     ClaudeSchemaValidationError,
     CodexSchemaValidationError,

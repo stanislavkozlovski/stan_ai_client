@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import json
 import os
 from unittest.mock import Mock, patch
 
 import pytest
 
-from stan_ai_client import GrokClient, GrokRunOptions
+from stan_ai_client import (
+    GrokCancelledError,
+    GrokClient,
+    GrokMalformedStructuredOutputError,
+    GrokRunOptions,
+)
 from stan_ai_client.exceptions import (
     GrokExecutableNotFoundError,
     GrokProcessError,
+    GrokProtocolError,
     GrokRateLimitError,
     GrokStructuredOutputMissingError,
 )
@@ -66,14 +73,14 @@ def test_policy_rules_are_repeated_flags(mock_exec: Mock) -> None:
     mock_exec.return_value.stderr = ""
     mock_exec.return_value.returncode = 0
 
-    client = GrokClient()
-    client.run_text(
-        "say hi",
-        options=GrokRunOptions(
+    with pytest.warns(DeprecationWarning, match="deprecated permission-rule alias"):
+        options = GrokRunOptions(
             allowed_tools=("Bash(git *)", "Read"),
             disallowed_tools=("Write", "Edit"),
-        ),
-    )
+        )
+
+    client = GrokClient()
+    client.run_text("say hi", options=options)
 
     argv = mock_exec.call_args[0][0].argv
     assert argv.count("--allow") == 2
@@ -82,6 +89,84 @@ def test_policy_rules_are_repeated_flags(mock_exec: Mock) -> None:
     assert argv.count("--deny") == 2
     assert argv[argv.index("--deny") + 1] == "Write"
     assert argv[argv.index("--deny", argv.index("--deny") + 1) + 1] == "Edit"
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_permission_rules_and_tool_inventory_use_distinct_flags(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = "ok\n"
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    client = GrokClient()
+    client.run_text(
+        "say hi",
+        options=GrokRunOptions(
+            permission_allow_rules=("read_file",),
+            permission_deny_rules=("run_terminal_cmd",),
+            tools=("read_file", "grep", "list_dir"),
+            excluded_tools=("web_fetch", "web_search"),
+        ),
+    )
+
+    argv = mock_exec.call_args[0][0].argv
+    assert argv.count("--tools") == 1
+    assert argv.count("--disallowed-tools") == 1
+    assert argv[argv.index("--allow") + 1] == "read_file"
+    assert argv[argv.index("--deny") + 1] == "run_terminal_cmd"
+    assert argv[argv.index("--tools") + 1] == "read_file,grep,list_dir"
+    assert argv[argv.index("--disallowed-tools") + 1] == "web_fetch,web_search"
+
+
+def test_grok_options_reject_permission_alias_conflicts() -> None:
+    with pytest.raises(ValueError, match="both allowed_tools and permission_allow_rules"):
+        GrokRunOptions(
+            allowed_tools=("legacy",),
+            permission_allow_rules=("canonical",),
+        )
+    with pytest.raises(ValueError, match="both disallowed_tools and permission_deny_rules"):
+        GrokRunOptions(
+            disallowed_tools=("legacy",),
+            permission_deny_rules=("canonical",),
+        )
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_tool_and_permission_options_preserve_default_and_empty_override_semantics(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = "ok\n"
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+    client = GrokClient(
+        default_options=GrokRunOptions(
+            permission_allow_rules=("read_file",),
+            permission_deny_rules=("run_terminal_cmd",),
+            tools=("read_file",),
+            excluded_tools=("web_fetch",),
+        )
+    )
+
+    client.run_text("use defaults", options=GrokRunOptions())
+    default_argv = mock_exec.call_args[0][0].argv
+    assert default_argv[default_argv.index("--allow") + 1] == "read_file"
+    assert default_argv[default_argv.index("--deny") + 1] == "run_terminal_cmd"
+    assert default_argv[default_argv.index("--tools") + 1] == "read_file"
+    assert default_argv[default_argv.index("--disallowed-tools") + 1] == "web_fetch"
+
+    client.run_text(
+        "clear defaults",
+        options=GrokRunOptions(
+            permission_allow_rules=(),
+            permission_deny_rules=(),
+            tools=(),
+            excluded_tools=(),
+        ),
+    )
+    cleared_argv = mock_exec.call_args[0][0].argv
+    assert "--allow" not in cleared_argv
+    assert "--deny" not in cleared_argv
+    assert cleared_argv[cleared_argv.index("--tools") + 1] == ""
+    assert cleared_argv[cleared_argv.index("--disallowed-tools") + 1] == ""
 
 
 @patch("stan_ai_client.grok.execute_command")
@@ -166,6 +251,234 @@ def test_run_structured(mock_exec: Mock) -> None:
     client = GrokClient()
     res = client.run_structured("return ans", schema=schema)
     assert res.structured_output == {"ans": 42}
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_recovers_one_json_value_from_text_when_output_is_null(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "text": '{"ans": 42}',
+            "stopReason": "EndTurn",
+            "sessionId": "s1",
+            "structuredOutput": None,
+        }
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, int]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"ans": {"type": "integer"}},
+            "required": ["ans"],
+            "additionalProperties": False,
+        }
+    )
+    result = GrokClient().run_structured("return ans", schema=schema)
+
+    assert result.structured_output == {"ans": 42}
+    assert result.payload.session_id == "s1"
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_classifies_concatenated_text_before_schema_validation(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "text": '{"ans": 1}{"ans": 2}{"ans": 3}{"ans": 4}',
+            "stopReason": "EndTurn",
+            "sessionId": "s1",
+            "requestId": "r1",
+            "structuredOutput": None,
+        }
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, int]] = StructuredSchema.from_dict(
+        {"type": "object", "properties": {"ans": {"type": "integer"}}}
+    )
+    with pytest.raises(GrokMalformedStructuredOutputError) as exc:
+        GrokClient().run_structured("return ans", schema=schema)
+
+    assert exc.value.json_value_count == 4
+    assert "4 concatenated top-level JSON values" in exc.value.detail
+    assert exc.value.session_id == "s1"
+    assert exc.value.request_id == "r1"
+    assert exc.value.stop_reason == "EndTurn"
+    assert exc.value.payload.duration_ms is not None
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_classifies_concatenated_direct_stdout(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = '{"ans": 1}{"ans": 2}'
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, int]] = StructuredSchema.from_dict(
+        {"type": "object", "properties": {"ans": {"type": "integer"}}}
+    )
+    with pytest.raises(GrokMalformedStructuredOutputError) as exc:
+        GrokClient().run_structured("return ans", schema=schema)
+
+    assert exc.value.json_value_count == 2
+    assert "2 concatenated top-level JSON values" in exc.value.detail
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_classifies_end_turn_with_null_output_as_missing(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "text": "",
+            "stopReason": "EndTurn",
+            "sessionId": "s1",
+            "structuredOutput": None,
+        }
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict(
+        {"type": "object"}
+    )
+    with pytest.raises(GrokStructuredOutputMissingError) as exc:
+        GrokClient().run_structured("return object", schema=schema)
+
+    assert exc.value.session_id == "s1"
+    assert exc.value.stop_reason == "EndTurn"
+    assert exc.value.payload.structured_output is None
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_classifies_permission_cancellation_before_validation(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "text": "",
+            "stopReason": "Cancelled",
+            "sessionId": "s1",
+            "requestId": "r1",
+            "cancellationCategory": "permission_cancelled",
+            "structuredOutput": None,
+        }
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict(
+        {"type": "object"}
+    )
+    with pytest.raises(GrokCancelledError) as exc:
+        GrokClient().run_structured("return object", schema=schema)
+
+    assert exc.value.session_id == "s1"
+    assert exc.value.request_id == "r1"
+    assert exc.value.stop_reason == "Cancelled"
+    assert exc.value.cancellation_category == "permission_cancelled"
+    assert exc.value.payload.duration_ms is not None
+    assert "permission_cancelled" in str(exc.value)
+    assert exc.value.returncode == 0
+    assert isinstance(exc.value, GrokProcessError)
+    assert not isinstance(exc.value, GrokProtocolError)
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_cancellation_wins_over_partial_structured_output(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "text": '{"ans": 42}',
+            "stopReason": "Cancelled",
+            "sessionId": "s1",
+            "structuredOutput": {"ans": 42},
+        }
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, int]] = StructuredSchema.from_dict(
+        {"type": "object", "properties": {"ans": {"type": "integer"}}}
+    )
+    with pytest.raises(GrokCancelledError):
+        GrokClient().run_structured("return ans", schema=schema)
+
+
+@pytest.mark.parametrize(
+    "raw_value",
+    [
+        {"stopReason": "Cancelled", "structuredOutput": None},
+        {"text": "domain state", "stopReason": "Cancelled", "structuredOutput": None},
+    ],
+)
+@patch("stan_ai_client.grok.execute_command")
+def test_raw_schema_with_cancelled_stop_reason_is_not_control_metadata(
+    mock_exec: Mock,
+    raw_value: dict[str, object],
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(raw_value)
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "stopReason": {"const": "Cancelled"},
+                "structuredOutput": {"type": "null"},
+            },
+            "required": ["stopReason", "structuredOutput"],
+            "additionalProperties": False,
+        }
+    )
+    result = GrokClient().run_structured("return domain state", schema=schema)
+
+    assert result.structured_output == raw_value
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_json_classifies_cancelled_envelope(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "text": "",
+            "stopReason": "Cancelled",
+            "sessionId": "s1",
+            "cancellationCategory": "permission_cancelled",
+        }
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    with pytest.raises(GrokCancelledError) as exc:
+        GrokClient().run_json("test")
+
+    assert exc.value.session_id == "s1"
+    assert exc.value.cancellation_category == "permission_cancelled"
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_malformed_protocol_error_keeps_raw_stdout_out_of_message(mock_exec: Mock) -> None:
+    raw_stdout = "sensitive non-json model output"
+    mock_exec.return_value.stdout = raw_stdout
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict(
+        {"type": "object"}
+    )
+    with pytest.raises(GrokProtocolError) as exc:
+        GrokClient().run_structured("return object", schema=schema)
+
+    assert exc.value.stdout == raw_stdout
+    assert raw_stdout not in str(exc.value)
+    assert "captured on the exception" in str(exc.value)
 
 
 @patch("stan_ai_client.grok.execute_command")

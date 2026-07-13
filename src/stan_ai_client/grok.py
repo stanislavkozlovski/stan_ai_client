@@ -14,7 +14,9 @@ from jsonschema.exceptions import ValidationError
 from ._options import first_set, first_set_or
 from ._retry import run_with_rate_limit_retry
 from .exceptions import (
+    GrokCancelledError,
     GrokExecutableNotFoundError,
+    GrokMalformedStructuredOutputError,
     GrokProcessError,
     GrokProtocolError,
     GrokRateLimitError,
@@ -25,6 +27,7 @@ from .exceptions import (
 from .grok_parser import (
     GrokStructuredOutcome,
     classify_grok_structured_stdout,
+    is_grok_cancelled_payload,
     is_grok_error_payload,
     summarize_grok_error_text,
     try_parse_grok_json_payload,
@@ -68,9 +71,10 @@ class ResolvedGrokRunOptions:
     session_id: str | None
     continue_last_session: bool
     fork_session: bool
-    allowed_tools: tuple[str, ...] | None
-    disallowed_tools: tuple[str, ...] | None
+    permission_allow_rules: tuple[str, ...] | None
+    permission_deny_rules: tuple[str, ...] | None
     tools: tuple[str, ...] | None
+    excluded_tools: tuple[str, ...] | None
     system_prompt: str | None
     add_dirs: tuple[str | Path, ...] | None
     max_turns: int | None
@@ -253,6 +257,30 @@ class GrokClient:
                 payload=self._stamp(outcome.payload, metadata),
             )
 
+        if outcome.kind == "cancelled":
+            cancelled_error = self._build_cancelled_error(
+                metadata,
+                stdout=stdout,
+                stderr=stderr,
+                payload=self._stamp(outcome.payload, metadata),
+            )
+            self._log_cancelled_error(cancelled_error)
+            raise cancelled_error
+
+        if outcome.kind == "malformed":
+            detail = outcome.detail or "Grok returned malformed structured output"
+            malformed_error = GrokMalformedStructuredOutputError(
+                f"Grok structured output was malformed: {detail}",
+                command=metadata,
+                stdout=stdout,
+                stderr=stderr,
+                payload=self._stamp(outcome.payload, metadata),
+                detail=detail,
+                json_value_count=outcome.json_value_count,
+            )
+            self._log_protocol_error(malformed_error)
+            raise malformed_error
+
         if outcome.kind == "missing":
             raw_validation = self._validate_explicit_raw_missing_candidate(
                 schema=schema,
@@ -340,12 +368,14 @@ class GrokClient:
         metadata: CommandMetadata,
     ) -> tuple[GrokJsonPayload, TStructured]:
         first_error: ValidationError | None = None
+        first_value: object | None = None
         for candidate_payload, value in outcome.candidates:
             try:
                 structured_output = schema.validate_response(value)
             except ValidationError as exc:
                 if first_error is None:
                     first_error = exc
+                    first_value = value
                 continue
             return self._stamp(candidate_payload, metadata), structured_output
 
@@ -355,6 +385,7 @@ class GrokClient:
             completed=completed,
             metadata=metadata,
             payload=self._stamp(outcome.payload, metadata),
+            structured_output=first_value,
         )
 
     def _build_structured_result(
@@ -389,6 +420,7 @@ class GrokClient:
         completed: CompletedProcess[str],
         metadata: CommandMetadata,
         payload: GrokJsonPayload,
+        structured_output: object,
     ) -> NoReturn:
         self.logger.debug("Grok structuredOutput validation failed error=%s", schema_error.message)
         error = GrokStructuredOutputValidationError(
@@ -397,7 +429,7 @@ class GrokClient:
             stdout=completed.stdout,
             stderr=completed.stderr,
             payload=payload,
-            structured_output=payload.structured_output,
+            structured_output=structured_output,
         )
         self._log_protocol_error(error)
         raise error from schema_error
@@ -464,14 +496,16 @@ class GrokClient:
         if effective.effort is not None:
             argv.extend(["--effort", effective.effort])
 
-        if effective.allowed_tools is not None:
-            for rule in effective.allowed_tools:
+        if effective.permission_allow_rules is not None:
+            for rule in effective.permission_allow_rules:
                 argv.extend(["--allow", rule])
-        if effective.disallowed_tools is not None:
-            for rule in effective.disallowed_tools:
+        if effective.permission_deny_rules is not None:
+            for rule in effective.permission_deny_rules:
                 argv.extend(["--deny", rule])
         if effective.tools is not None:
             argv.extend(["--tools", ",".join(effective.tools)])
+        if effective.excluded_tools is not None:
+            argv.extend(["--disallowed-tools", ",".join(effective.excluded_tools)])
         if effective.permission_mode is not None:
             argv.extend(["--permission-mode", effective.permission_mode])
         if effective.system_prompt is not None:
@@ -610,7 +644,46 @@ class GrokClient:
                 payload=payload,
             )
 
+        if is_grok_cancelled_payload(payload):
+            cancelled_error = self._build_cancelled_error(
+                metadata,
+                stdout=stdout,
+                stderr=stderr,
+                payload=payload,
+            )
+            self._log_cancelled_error(cancelled_error)
+            raise cancelled_error
+
         return completed, metadata, payload
+
+    def _build_cancelled_error(
+        self,
+        command: CommandMetadata,
+        *,
+        stdout: str,
+        stderr: str,
+        payload: GrokJsonPayload,
+    ) -> GrokCancelledError:
+        details = [f"stopReason={payload.stop_reason or 'unknown'}"]
+        if payload.cancellation_category is not None:
+            details.append(f"category={payload.cancellation_category}")
+        return GrokCancelledError(
+            f"Grok turn was cancelled ({', '.join(details)})",
+            command=command,
+            stdout=stdout,
+            stderr=stderr,
+            payload=payload,
+        )
+
+    def _log_cancelled_error(self, error: GrokCancelledError) -> None:
+        self.logger.warning(
+            "Grok turn cancelled returncode=%d elapsed_ms=%.0f "
+            "stop_reason=%s cancellation_category=%s",
+            error.returncode,
+            error.command.elapsed_ms,
+            error.stop_reason,
+            error.cancellation_category,
+        )
 
     def _build_process_error(
         self,
@@ -683,9 +756,16 @@ class GrokClient:
             fork_session=first_set_or(
                 override.fork_session, default.fork_session, default=False
             ),
-            allowed_tools=first_set(override.allowed_tools, default.allowed_tools),
-            disallowed_tools=first_set(override.disallowed_tools, default.disallowed_tools),
+            permission_allow_rules=first_set(
+                first_set(override.permission_allow_rules, override.allowed_tools),
+                first_set(default.permission_allow_rules, default.allowed_tools),
+            ),
+            permission_deny_rules=first_set(
+                first_set(override.permission_deny_rules, override.disallowed_tools),
+                first_set(default.permission_deny_rules, default.disallowed_tools),
+            ),
             tools=first_set(override.tools, default.tools),
+            excluded_tools=first_set(override.excluded_tools, default.excluded_tools),
             system_prompt=first_set(override.system_prompt, default.system_prompt),
             add_dirs=first_set(override.add_dirs, default.add_dirs),
             max_turns=first_set(override.max_turns, default.max_turns),
@@ -768,7 +848,8 @@ class GrokClient:
             )
 
         return GrokProtocolError(
-            f"Grok returned non-JSON output in {protocol_name}: {stdout.strip()[:500]}",
+            f"Grok returned non-JSON output in {protocol_name} "
+            f"({len(stdout)} stdout characters captured on the exception)",
             command=command,
             stdout=stdout,
             stderr=stderr,

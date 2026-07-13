@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Generic, Literal, Mapping, TypeVar
@@ -87,6 +88,12 @@ class GrokRunOptions:
 
     Prompt delivery (stdin vs argv) is handled transparently by GrokClient.
     No input_mode is exposed. Use --prompt-file automatically for very long prompts.
+
+    ``tools`` and ``excluded_tools`` control which built-in tools the model can
+    see. ``permission_allow_rules`` and ``permission_deny_rules`` instead decide
+    whether visible tool calls are approved. The legacy ``allowed_tools`` and
+    ``disallowed_tools`` names remain permission-rule aliases for compatibility;
+    they never filter the visible tool inventory.
     """
 
     cwd: str | Path | None = None
@@ -105,6 +112,34 @@ class GrokRunOptions:
     max_turns: int | None = None
     extra_args: tuple[str, ...] | None = None
     env: Mapping[str, str] | None = None
+    # Appended to preserve every positional slot from the original public API.
+    permission_allow_rules: tuple[str, ...] | None = None
+    permission_deny_rules: tuple[str, ...] | None = None
+    excluded_tools: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        aliases = (
+            ("allowed_tools", self.allowed_tools, "permission_allow_rules", self.permission_allow_rules),
+            (
+                "disallowed_tools",
+                self.disallowed_tools,
+                "permission_deny_rules",
+                self.permission_deny_rules,
+            ),
+        )
+        for legacy_name, legacy_value, canonical_name, canonical_value in aliases:
+            if legacy_value is not None and canonical_value is not None:
+                raise ValueError(
+                    f"GrokRunOptions cannot set both {legacy_name} and {canonical_name}"
+                )
+            if legacy_value is not None:
+                warnings.warn(
+                    f"GrokRunOptions.{legacy_name} is a deprecated permission-rule "
+                    f"alias; use {canonical_name}. Use tools/excluded_tools to filter "
+                    "the built-in tool inventory.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
 
 
 @dataclass(frozen=True)
@@ -235,6 +270,15 @@ class GrokJsonPayload:
     @property
     def has_structured_output(self) -> bool:
         return self._structured_output_present
+
+    @property
+    def cancellation_category(self) -> str | None:
+        value = _first_present(
+            self.extras,
+            "cancellationCategory",
+            "cancellation_category",
+        )
+        return value if isinstance(value, str) else None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GrokJsonPayload":

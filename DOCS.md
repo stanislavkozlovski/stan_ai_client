@@ -331,6 +331,9 @@ class GrokRunOptions:
     max_turns: int | None = None
     extra_args: tuple[str, ...] | None = None
     env: Mapping[str, str] | None = None
+    permission_allow_rules: tuple[str, ...] | None = None
+    permission_deny_rules: tuple[str, ...] | None = None
+    excluded_tools: tuple[str, ...] | None = None
 ```
 
 Important mappings:
@@ -341,9 +344,16 @@ Important mappings:
 - `permission_mode`: `--permission-mode`
 - `session_id`: `--session-id <session_id>`
 - `continue_last_session`: `--continue`
-- `allowed_tools`: repeated `--allow <rule>`
-- `disallowed_tools`: repeated `--deny <rule>`
-- `tools`: `--tools <comma-separated-tools>`
+- `permission_allow_rules`: repeated `--allow <rule>` permission rules
+- `permission_deny_rules`: repeated `--deny <rule>` permission rules
+- `tools`: `--tools <comma-separated-tool-ids>`; this is the positive filter
+  for the built-in tools visible to Grok
+- `excluded_tools`: `--disallowed-tools <comma-separated-tool-ids>`; removes
+  built-in tools from Grok's visible inventory
+- `allowed_tools`: deprecated compatibility alias for `permission_allow_rules`
+- `disallowed_tools`: deprecated compatibility alias for
+  `permission_deny_rules`; despite its historical name, it does not remove
+  tools from the visible inventory
 - `system_prompt`: `--system-prompt-override`
 - `add_dirs`: accepted for API symmetry but not emitted; Grok currently has no
   documented add-directory flag distinct from `--cwd`
@@ -353,6 +363,18 @@ Important mappings:
 Prompt delivery is automatic: short prompts use `-p <prompt>`, while long
 prompts use `--prompt-file <tempfile>`. Generated invocations include
 `--no-auto-update` by default for headless automation.
+
+Permission rules and tool filtering are deliberately separate. For a
+read-only headless run, prefer a positive tool inventory:
+
+```python
+GrokRunOptions(tools=("read_file", "grep", "list_dir"))
+```
+
+Using `permission_deny_rules=("Bash",)` would deny shell calls if the
+tool were visible, but would not prevent Grok from choosing it. In unattended
+runs, a visible tool without a matching permission rule can still trigger a
+permission cancellation.
 
 ## Execution Modes
 
@@ -546,6 +568,16 @@ Provider-specific exceptions remain available:
 - `CodexRateLimitError`
 - `CodexStructuredOutputMissingError`
 - `CodexStructuredOutputValidationError`
+- `GrokCodeError`
+- `GrokExecutableNotFoundError`
+- `GrokTimeoutError`
+- `GrokProcessError`
+- `GrokProtocolError`
+- `GrokRateLimitError`
+- `GrokCancelledError`
+- `GrokMalformedStructuredOutputError`
+- `GrokStructuredOutputMissingError`
+- `GrokStructuredOutputValidationError`
 
 Provider-neutral base classes are also exported:
 
@@ -562,8 +594,15 @@ Provider-neutral base classes are also exported:
 - `RateLimitError`
 
 Catch provider-specific exceptions when you care which CLI failed. Catch
-provider-neutral exceptions when the caller should handle Claude and Codex the
-same way.
+provider-neutral exceptions when the caller should handle Claude, Codex, and
+Grok the same way.
+
+Every `GrokProtocolError` and `GrokCancelledError` exposes `session_id`,
+`request_id`, `stop_reason`, and `cancellation_category` when Grok supplied
+them, while the complete raw streams remain available as `stdout` and `stderr`.
+`GrokMalformedStructuredOutputError` also exposes a safe `detail` and
+`json_value_count`; callers can log those without copying raw model output into
+routine diagnostics.
 
 ## Rate Limits
 
