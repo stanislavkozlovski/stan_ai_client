@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -394,6 +395,39 @@ def test_run_structured_classifies_truncated_envelope_text(mock_exec: Mock) -> N
     assert "before completing a top-level value" in exc.value.detail
 
 
+@pytest.mark.parametrize("text", ['{"ans": 1}{"ans": 2}', '{"ans":'])
+@patch("stan_ai_client.grok.execute_command")
+def test_raw_schema_preserves_json_like_text_when_output_is_null(
+    mock_exec: Mock,
+    text: str,
+) -> None:
+    raw_value = {
+        "text": text,
+        "stopReason": "EndTurn",
+        "structuredOutput": None,
+    }
+    mock_exec.return_value.stdout = json.dumps(raw_value)
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "stopReason": {"const": "EndTurn"},
+                "structuredOutput": {"type": "null"},
+            },
+            "required": ["text", "stopReason", "structuredOutput"],
+            "additionalProperties": False,
+        }
+    )
+    result = GrokClient().run_structured("return domain state", schema=schema)
+
+    assert result.structured_output == raw_value
+    assert result.payload.structured_output == raw_value
+
+
 @patch("stan_ai_client.grok.execute_command")
 def test_run_structured_classifies_end_turn_with_null_output_as_missing(
     mock_exec: Mock,
@@ -507,6 +541,7 @@ def test_raw_schema_with_cancelled_stop_reason_is_not_control_metadata(
     result = GrokClient().run_structured("return domain state", schema=schema)
 
     assert result.structured_output == raw_value
+    assert result.payload.structured_output == raw_value
 
 
 @pytest.mark.parametrize("identifier", ["sessionId", "requestId"])
@@ -534,6 +569,42 @@ def test_raw_schema_with_cancelled_stop_reason_and_identifier_is_preserved(
     result = GrokClient().run_structured("return domain state", schema=schema)
 
     assert result.structured_output == raw_value
+
+
+@pytest.mark.parametrize("composition", ["ref", "allOf"])
+@patch("stan_ai_client.grok.execute_command")
+def test_composed_raw_cancellation_schema_is_preserved(
+    mock_exec: Mock,
+    composition: str,
+) -> None:
+    raw_value = {"stopReason": "Cancelled", "sessionId": "domain-id"}
+    mock_exec.return_value.stdout = json.dumps(raw_value)
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    domain_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "stopReason": {"const": "Cancelled"},
+            "sessionId": {"type": "string"},
+        },
+        "required": ["stopReason", "sessionId"],
+        "additionalProperties": False,
+    }
+    schema_dict: dict[str, Any]
+    if composition == "ref":
+        schema_dict = {
+            "$defs": {"DomainState": domain_schema},
+            "$ref": "#/$defs/DomainState",
+        }
+    else:
+        schema_dict = {"allOf": [domain_schema]}
+
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(schema_dict)
+    result = GrokClient().run_structured("return domain state", schema=schema)
+
+    assert result.structured_output == raw_value
+    assert result.payload.structured_output == raw_value
 
 
 @patch("stan_ai_client.grok.execute_command")

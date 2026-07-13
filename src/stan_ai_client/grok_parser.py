@@ -215,7 +215,9 @@ class GrokStructuredOutcome:
     - ``"cancelled"``: the envelope's stop reason says the turn was cancelled;
       raise a cancellation error unless an explicit raw candidate validates.
     - ``"malformed"``: Grok returned structured text that is not exactly one JSON
-      value. ``json_value_count`` distinguishes concatenated roots when known.
+      value. ``json_value_count`` distinguishes concatenated roots when known. A
+      complete outer raw value remains a candidate when only its envelope-like
+      ``text`` field was malformed.
     - ``"missing"``: ``payload`` is an envelope that produced no structuredOutput;
       raise the structured-output-missing error unless an explicit raw candidate
       validates against the caller schema.
@@ -224,9 +226,9 @@ class GrokStructuredOutcome:
       against the caller schema in order. The first value that validates wins and
       its payload is returned.
 
-    Only the kinds whose value may still be the caller's raw schema object carry
-    ``candidates``; ``error`` and ``malformed`` leave them empty because no value
-    survived intact.
+    Failure kinds carry ``candidates`` only when a complete outer value may still
+    be the caller's raw schema object. Explicit errors and malformed stdout leave
+    them empty because no eligible value survived intact.
     """
 
     kind: Literal["cancelled", "error", "malformed", "missing", "validate"]
@@ -288,6 +290,7 @@ def classify_grok_structured_stdout(stdout: str) -> GrokStructuredOutcome | None
             return GrokStructuredOutcome(
                 "malformed",
                 envelope,
+                raw_candidates,
                 detail=recovered.detail,
                 json_value_count=recovered.json_value_count,
             )

@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 from typing import Any, Callable, Mapping, NoReturn, TypeVar, overload
+from urllib.parse import unquote
 
 from jsonschema.exceptions import ValidationError
 
@@ -257,7 +258,7 @@ class GrokClient:
                 payload=self._stamp(outcome.payload, metadata),
             )
 
-        if outcome.kind in ("cancelled", "missing"):
+        if outcome.kind != "validate" and outcome.candidates:
             recovered = self._recover_raw_structured_output(
                 schema=schema,
                 outcome=outcome,
@@ -303,7 +304,7 @@ class GrokClient:
         Grok envelope fields are ordinary JSON keys, so a schema that models them
         yields a value the parser cannot tell apart from control metadata. Every
         failure outcome that carries candidates gets its one recovery attempt
-        here, which is what keeps "cancelled" and "missing" from drifting apart.
+        here, which keeps the failure kinds from drifting apart.
         """
         validated = self._validate_explicit_raw_candidate(
             schema=schema,
@@ -346,16 +347,7 @@ class GrokClient:
     ) -> bool:
         if not isinstance(value, dict):
             return False
-
-        mentioned_keys: set[str] = set()
-        properties = schema.schema.get("properties")
-        if isinstance(properties, dict):
-            mentioned_keys.update(key for key in properties if isinstance(key, str))
-
-        required = schema.schema.get("required")
-        if isinstance(required, list):
-            mentioned_keys.update(key for key in required if isinstance(key, str))
-
+        mentioned_keys = _schema_instance_object_keys(schema.schema, root=schema.schema)
         return bool(mentioned_keys.intersection(value))
 
     def _validate_structured_candidates(
@@ -916,6 +908,84 @@ def _permission_allow_rules(options: GrokRunOptions) -> tuple[str, ...] | None:
 def _permission_deny_rules(options: GrokRunOptions) -> tuple[str, ...] | None:
     """Collapse the deprecated ``disallowed_tools`` alias onto the permission rules."""
     return first_set(options.permission_deny_rules, options.disallowed_tools)
+
+
+def _schema_instance_object_keys(
+    schema: Any,
+    *,
+    root: dict[str, Any],
+    seen: set[int] | None = None,
+) -> set[str]:
+    """Collect object keys declared for the current instance across schema composition."""
+    if not isinstance(schema, dict):
+        return set()
+
+    visited = seen if seen is not None else set()
+    identity = id(schema)
+    if identity in visited:
+        return set()
+    visited.add(identity)
+
+    keys: set[str] = set()
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        keys.update(key for key in properties if isinstance(key, str))
+
+    required = schema.get("required")
+    if isinstance(required, list):
+        keys.update(key for key in required if isinstance(key, str))
+
+    referenced = _resolve_local_schema_ref(root, schema.get("$ref"))
+    if referenced is not None:
+        keys.update(_schema_instance_object_keys(referenced, root=root, seen=visited))
+
+    for keyword in ("allOf", "anyOf", "oneOf"):
+        branches = schema.get(keyword)
+        if isinstance(branches, list):
+            for branch in branches:
+                keys.update(_schema_instance_object_keys(branch, root=root, seen=visited))
+
+    for keyword in ("if", "then", "else", "not"):
+        keys.update(
+            _schema_instance_object_keys(schema.get(keyword), root=root, seen=visited)
+        )
+
+    dependent_schemas = schema.get("dependentSchemas")
+    if isinstance(dependent_schemas, dict):
+        keys.update(key for key in dependent_schemas if isinstance(key, str))
+        for dependent_schema in dependent_schemas.values():
+            keys.update(
+                _schema_instance_object_keys(
+                    dependent_schema,
+                    root=root,
+                    seen=visited,
+                )
+            )
+
+    dependent_required = schema.get("dependentRequired")
+    if isinstance(dependent_required, dict):
+        keys.update(key for key in dependent_required if isinstance(key, str))
+        for dependencies in dependent_required.values():
+            if isinstance(dependencies, list):
+                keys.update(key for key in dependencies if isinstance(key, str))
+
+    return keys
+
+
+def _resolve_local_schema_ref(root: dict[str, Any], ref: Any) -> Any | None:
+    """Resolve a local JSON Pointer ref without fetching external schema resources."""
+    if ref == "#":
+        return root
+    if not isinstance(ref, str) or not ref.startswith("#/"):
+        return None
+
+    target: Any = root
+    for encoded_token in ref[2:].split("/"):
+        token = unquote(encoded_token).replace("~1", "/").replace("~0", "~")
+        if not isinstance(target, dict) or token not in target:
+            return None
+        target = target[token]
+    return target
 
 
 def _redact_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
