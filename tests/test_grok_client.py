@@ -292,6 +292,31 @@ def test_run_structured_recovers_one_json_value_from_text_when_output_is_null(
     assert result.payload.session_id == "s1"
 
 
+@pytest.mark.parametrize("text", ["", "not JSON", '"fallback"', '{"broken":'])
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_accepts_null_output_when_schema_allows_it(
+    mock_exec: Mock,
+    text: str,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "text": text,
+            "stopReason": "EndTurn",
+            "sessionId": "s1",
+            "structuredOutput": None,
+        }
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[None] = StructuredSchema.from_dict({"type": "null"})
+    result = GrokClient().run_structured("return null", schema=schema)
+
+    assert result.structured_output is None
+    assert result.payload.session_id == "s1"
+    assert result.payload.structured_output is None
+
+
 @patch("stan_ai_client.grok.execute_command")
 def test_run_structured_classifies_concatenated_text_before_schema_validation(
     mock_exec: Mock,
@@ -571,8 +596,36 @@ def test_run_structured_cancellation_wins_over_partial_structured_output(
 
 
 @pytest.mark.parametrize(
+    "payload",
+    [
+        {"stopReason": "Cancelled"},
+        {"stopReason": "Cancelled", "structuredOutput": {"ans": 42}},
+    ],
+)
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_classifies_stop_reason_only_cancellation(
+    mock_exec: Mock,
+    payload: dict[str, object],
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(payload)
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict(
+        {"type": "object"}
+    )
+    with pytest.raises(GrokCancelledError) as exc:
+        GrokClient().run_structured("return object", schema=schema)
+
+    assert exc.value.stop_reason == "Cancelled"
+    assert exc.value.session_id is None
+    assert exc.value.request_id is None
+
+
+@pytest.mark.parametrize(
     "raw_value",
     [
+        {"stopReason": "Cancelled"},
         {"stopReason": "Cancelled", "structuredOutput": None},
         {"text": "domain state", "stopReason": "Cancelled", "structuredOutput": None},
     ],
@@ -594,7 +647,7 @@ def test_raw_schema_with_cancelled_stop_reason_is_not_control_metadata(
                 "stopReason": {"const": "Cancelled"},
                 "structuredOutput": {"type": "null"},
             },
-            "required": ["stopReason", "structuredOutput"],
+            "required": ["stopReason"],
             "additionalProperties": False,
         }
     )
@@ -631,7 +684,7 @@ def test_raw_schema_with_cancelled_stop_reason_and_identifier_is_preserved(
     assert result.structured_output == raw_value
 
 
-@pytest.mark.parametrize("composition", ["ref", "allOf"])
+@pytest.mark.parametrize("composition", ["ref", "allOf", "anyOf", "oneOf"])
 @patch("stan_ai_client.grok.execute_command")
 def test_composed_raw_cancellation_schema_is_preserved(
     mock_exec: Mock,
@@ -658,13 +711,93 @@ def test_composed_raw_cancellation_schema_is_preserved(
             "$ref": "#/$defs/DomainState",
         }
     else:
-        schema_dict = {"allOf": [domain_schema]}
+        schema_dict = {composition: [domain_schema]}
 
     schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(schema_dict)
     result = GrokClient().run_structured("return domain state", schema=schema)
 
     assert result.structured_output == raw_value
     assert result.payload.structured_output == raw_value
+
+
+@pytest.mark.parametrize("composition", ["anyOf", "oneOf"])
+@pytest.mark.parametrize(
+    ("payload", "error_type"),
+    [
+        (
+            {"stopReason": "Cancelled", "sessionId": "s1"},
+            GrokCancelledError,
+        ),
+        (
+            {
+                "text": "",
+                "stopReason": "EndTurn",
+                "sessionId": "s1",
+                "structuredOutput": None,
+            },
+            GrokStructuredOutputMissingError,
+        ),
+        (
+            {
+                "text": '{"ans":',
+                "stopReason": "EndTurn",
+                "sessionId": "s1",
+                "structuredOutput": None,
+            },
+            GrokMalformedStructuredOutputError,
+        ),
+    ],
+)
+@patch("stan_ai_client.grok.execute_command")
+def test_raw_recovery_requires_key_in_validating_schema_branch(
+    mock_exec: Mock,
+    payload: dict[str, object],
+    error_type: type[Exception],
+    composition: str,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(payload)
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict(
+        {
+            composition: [
+                {
+                    "type": "object",
+                    "properties": {"sessionId": {"const": "domain-session"}},
+                    "required": ["sessionId"],
+                },
+                {"type": "object"},
+            ]
+        }
+    )
+    with pytest.raises(error_type):
+        GrokClient().run_structured("return object", schema=schema)
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_raw_recovery_fails_closed_for_unresolvable_schema_branch(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {"stopReason": "Cancelled", "sessionId": "s1"}
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict(
+        {
+            "anyOf": [
+                {"type": "object"},
+                {
+                    "$ref": "https://example.invalid/domain-schema.json",
+                    "properties": {"sessionId": {"type": "string"}},
+                },
+            ]
+        }
+    )
+    with pytest.raises(GrokCancelledError):
+        GrokClient().run_structured("return object", schema=schema)
 
 
 @patch("stan_ai_client.grok.execute_command")

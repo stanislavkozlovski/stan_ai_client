@@ -258,6 +258,22 @@ class GrokClient:
                 payload=self._stamp(outcome.payload, metadata),
             )
 
+        if outcome.kind != "validate" and outcome.candidates:
+            validated = self._validate_failure_candidates(
+                schema=schema,
+                outcome=outcome,
+                metadata=metadata,
+            )
+            if validated is not None:
+                payload, structured_output = validated
+                self.logger.debug("Grok null structuredOutput validation succeeded")
+                return self._build_structured_result(
+                    completed=completed,
+                    metadata=metadata,
+                    payload=payload,
+                    structured_output=structured_output,
+                )
+
         if outcome.kind != "validate" and outcome.explicit_raw_candidates:
             recovered = self._recover_raw_structured_output(
                 schema=schema,
@@ -323,6 +339,22 @@ class GrokClient:
             structured_output=structured_output,
         )
 
+    def _validate_failure_candidates(
+        self,
+        *,
+        schema: StructuredSchema[TStructured],
+        outcome: GrokStructuredOutcome,
+        metadata: CommandMetadata,
+    ) -> tuple[GrokJsonPayload, TStructured] | None:
+        """Try ordinary values retained by an otherwise failing classification."""
+        for candidate_payload, value in outcome.candidates:
+            try:
+                structured_output = schema.validate_response(value)
+            except ValidationError:
+                continue
+            return self._stamp(candidate_payload, metadata), structured_output
+        return None
+
     def _validate_explicit_raw_candidate(
         self,
         *,
@@ -331,11 +363,11 @@ class GrokClient:
         metadata: CommandMetadata,
     ) -> tuple[GrokJsonPayload, TStructured] | None:
         for candidate_payload, value in outcome.explicit_raw_candidates:
-            if not self._schema_mentions_raw_value_keys(schema, value):
-                continue
             try:
                 structured_output = schema.validate_response(value)
             except ValidationError:
+                continue
+            if not self._schema_mentions_raw_value_keys(schema, value):
                 continue
             return self._stamp(candidate_payload, metadata), structured_output
         return None
@@ -347,7 +379,27 @@ class GrokClient:
     ) -> bool:
         if not isinstance(value, dict):
             return False
-        mentioned_keys = _schema_instance_object_keys(schema.schema, root=schema.schema)
+
+        def branch_is_valid(branch: Any) -> bool:
+            if _has_external_schema_ref(branch):
+                return False
+            try:
+                return bool(
+                    schema._validator.evolve(schema=branch).is_valid(value)  # noqa: SLF001
+                )
+            except Exception:
+                # Raw recovery is a fail-closed ambiguity guard. The root schema
+                # already validated; an unevaluated branch may still contain an
+                # external or otherwise unresolvable reference, which must not
+                # turn a control envelope into a success or a new client crash.
+                return False
+
+        mentioned_keys = _schema_instance_object_keys(
+            schema.schema,
+            root=schema.schema,
+            instance=value,
+            branch_is_valid=branch_is_valid,
+        )
         return bool(mentioned_keys.intersection(value))
 
     def _validate_structured_candidates(
@@ -922,17 +974,19 @@ def _schema_instance_object_keys(
     schema: Any,
     *,
     root: dict[str, Any],
-    seen: set[int] | None = None,
+    instance: dict[str, Any],
+    branch_is_valid: Callable[[Any], bool],
+    seen: frozenset[int] | None = None,
 ) -> set[str]:
-    """Collect object keys declared for the current instance across schema composition."""
+    """Collect keys declared along schema branches that validate this instance."""
     if not isinstance(schema, dict):
         return set()
 
-    visited = seen if seen is not None else set()
+    visited = seen if seen is not None else frozenset()
     identity = id(schema)
     if identity in visited:
         return set()
-    visited.add(identity)
+    visited = visited | {identity}
 
     keys: set[str] = set()
     properties = schema.get("properties")
@@ -945,39 +999,96 @@ def _schema_instance_object_keys(
 
     referenced = _resolve_local_schema_ref(root, schema.get("$ref"))
     if referenced is not None:
-        keys.update(_schema_instance_object_keys(referenced, root=root, seen=visited))
+        keys.update(
+            _schema_instance_object_keys(
+                referenced,
+                root=root,
+                instance=instance,
+                branch_is_valid=branch_is_valid,
+                seen=visited,
+            )
+        )
 
     for keyword in ("allOf", "anyOf", "oneOf"):
         branches = schema.get(keyword)
         if isinstance(branches, list):
             for branch in branches:
-                keys.update(_schema_instance_object_keys(branch, root=root, seen=visited))
+                if branch_is_valid(branch):
+                    keys.update(
+                        _schema_instance_object_keys(
+                            branch,
+                            root=root,
+                            instance=instance,
+                            branch_is_valid=branch_is_valid,
+                            seen=visited,
+                        )
+                    )
 
-    for keyword in ("if", "then", "else", "not"):
-        keys.update(
-            _schema_instance_object_keys(schema.get(keyword), root=root, seen=visited)
-        )
-
-    dependent_schemas = schema.get("dependentSchemas")
-    if isinstance(dependent_schemas, dict):
-        keys.update(key for key in dependent_schemas if isinstance(key, str))
-        for dependent_schema in dependent_schemas.values():
+    conditional = schema.get("if")
+    if conditional is not None and ("then" in schema or "else" in schema):
+        condition_matches = branch_is_valid(conditional)
+        if condition_matches:
             keys.update(
                 _schema_instance_object_keys(
-                    dependent_schema,
+                    conditional,
                     root=root,
+                    instance=instance,
+                    branch_is_valid=branch_is_valid,
+                    seen=visited,
+                )
+            )
+        selected = schema.get("then" if condition_matches else "else")
+        if selected is not None and branch_is_valid(selected):
+            keys.update(
+                _schema_instance_object_keys(
+                    selected,
+                    root=root,
+                    instance=instance,
+                    branch_is_valid=branch_is_valid,
                     seen=visited,
                 )
             )
 
+    dependent_schemas = schema.get("dependentSchemas")
+    if isinstance(dependent_schemas, dict):
+        for key, dependent_schema in dependent_schemas.items():
+            if not isinstance(key, str) or key not in instance:
+                continue
+            keys.add(key)
+            if branch_is_valid(dependent_schema):
+                keys.update(
+                    _schema_instance_object_keys(
+                        dependent_schema,
+                        root=root,
+                        instance=instance,
+                        branch_is_valid=branch_is_valid,
+                        seen=visited,
+                    )
+                )
+
     dependent_required = schema.get("dependentRequired")
     if isinstance(dependent_required, dict):
-        keys.update(key for key in dependent_required if isinstance(key, str))
-        for dependencies in dependent_required.values():
+        for key, dependencies in dependent_required.items():
+            if not isinstance(key, str) or key not in instance:
+                continue
+            keys.add(key)
             if isinstance(dependencies, list):
                 keys.update(key for key in dependencies if isinstance(key, str))
 
     return keys
+
+
+def _has_external_schema_ref(schema: Any) -> bool:
+    """Whether a schema fragment could require fetching a non-local resource."""
+    if isinstance(schema, dict):
+        for keyword in ("$ref", "$dynamicRef", "$recursiveRef"):
+            ref = schema.get(keyword)
+            if isinstance(ref, str) and not ref.startswith("#"):
+                return True
+        return any(_has_external_schema_ref(value) for value in schema.values())
+    if isinstance(schema, list):
+        return any(_has_external_schema_ref(value) for value in schema)
+    return False
 
 
 def _resolve_local_schema_ref(root: dict[str, Any], ref: Any) -> Any | None:

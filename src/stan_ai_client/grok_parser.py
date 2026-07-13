@@ -61,15 +61,14 @@ def has_grok_cancelled_stop_reason(payload: GrokJsonPayload) -> bool:
 
 
 def is_grok_cancelled_payload(payload: GrokJsonPayload) -> bool:
-    """True for an ambiguous structured value proven to be a cancelled envelope.
+    """True when structured output reports a cancelled turn.
 
-    Structured schema values can legitimately contain a ``stopReason`` key, so a
-    cancelled-looking stop reason proves nothing on its own: require evidence
-    that only Grok mints.
+    Grok can omit every optional envelope field on a zero-exit cancellation. A
+    raw schema value may also use ``stopReason`` as domain data, so the client
+    gives an explicitly matching raw schema one guarded recovery attempt before
+    it raises the cancellation.
     """
-    if not has_grok_cancelled_stop_reason(payload):
-        return False
-    return _has_envelope_identifiers(payload) or _has_cancellation_metadata(payload)
+    return has_grok_cancelled_stop_reason(payload)
 
 
 def is_grok_structured_envelope(payload: GrokJsonPayload) -> bool:
@@ -223,10 +222,11 @@ class GrokStructuredOutcome:
     - ``"malformed"``: Grok returned structured text that is not exactly one JSON
       value. ``json_value_count`` distinguishes concatenated roots when known. A
       complete outer raw value remains a candidate when only its envelope-like
-      ``text`` field was malformed.
+      ``text`` field was malformed. An explicitly null ``structuredOutput`` may
+      remain an ordinary candidate for a schema that accepts null.
     - ``"missing"``: ``payload`` is an envelope that produced no structuredOutput;
-      raise the structured-output-missing error unless an explicit raw candidate
-      validates against the caller schema.
+      raise the structured-output-missing error unless an explicit null candidate
+      or guarded raw candidate validates against the caller schema.
     - ``"validate"``: ``payload`` is the raw-value payload used for error
       reporting, and ``candidates`` are the ``(payload, value)`` pairs to try
       against the caller schema in order. The first value that validates wins and
@@ -303,6 +303,7 @@ def classify_grok_structured_stdout(stdout: str) -> GrokStructuredOutcome | None
             return GrokStructuredOutcome(
                 "malformed",
                 envelope,
+                candidates=((envelope, None),),
                 explicit_raw_candidates=raw_candidates,
                 detail=recovered.detail,
                 json_value_count=recovered.json_value_count,
@@ -311,12 +312,18 @@ def classify_grok_structured_stdout(stdout: str) -> GrokStructuredOutcome | None
             return GrokStructuredOutcome(
                 "missing",
                 envelope,
+                candidates=((envelope, None),),
                 explicit_raw_candidates=raw_candidates,
             )
+        text_candidates: tuple[tuple[GrokJsonPayload, Any], ...] = (
+            (envelope, recovered.value),
+        )
+        if recovered.value is not None:
+            text_candidates = (*text_candidates, (envelope, None))
         return GrokStructuredOutcome(
             "validate",
             envelope,
-            candidates=((envelope, recovered.value),),
+            candidates=text_candidates,
             explicit_raw_candidates=raw_candidates,
         )
 
