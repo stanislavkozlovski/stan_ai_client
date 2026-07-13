@@ -51,17 +51,23 @@ def has_grok_result_envelope_evidence(payload: GrokJsonPayload) -> bool:
     return is_grok_envelope_metadata(payload) or _has_cancellation_metadata(payload)
 
 
+def has_grok_cancelled_stop_reason(payload: GrokJsonPayload) -> bool:
+    """True when Grok reports that the turn ended by cancellation."""
+    stop_reason = payload.stop_reason
+    return (
+        isinstance(stop_reason, str)
+        and stop_reason.casefold() in _CANCELLED_STOP_REASONS
+    )
+
+
 def is_grok_cancelled_payload(payload: GrokJsonPayload) -> bool:
-    """True for a Grok result envelope whose turn ended by cancellation.
+    """True for an ambiguous structured value proven to be a cancelled envelope.
 
     Structured schema values can legitimately contain a ``stopReason`` key, so a
     cancelled-looking stop reason proves nothing on its own: require evidence
     that only Grok mints.
     """
-    stop_reason = payload.stop_reason
-    if not isinstance(stop_reason, str):
-        return False
-    if stop_reason.casefold() not in _CANCELLED_STOP_REASONS:
+    if not has_grok_cancelled_stop_reason(payload):
         return False
     return _has_envelope_identifiers(payload) or _has_cancellation_metadata(payload)
 
@@ -226,14 +232,17 @@ class GrokStructuredOutcome:
       against the caller schema in order. The first value that validates wins and
       its payload is returned.
 
-    Failure kinds carry ``candidates`` only when a complete outer value may still
-    be the caller's raw schema object. Explicit errors and malformed stdout leave
-    them empty because no eligible value survived intact.
+    ``explicit_raw_candidates`` are complete outer objects that resemble control
+    envelopes. The client tries them only when the schema explicitly models one
+    of their keys, preventing permissive schemas from swallowing real envelopes.
+    Explicit errors and malformed stdout leave them empty because no eligible
+    value survived intact.
     """
 
     kind: Literal["cancelled", "error", "malformed", "missing", "validate"]
     payload: GrokJsonPayload
     candidates: tuple[tuple[GrokJsonPayload, Any], ...] = ()
+    explicit_raw_candidates: tuple[tuple[GrokJsonPayload, Any], ...] = ()
     detail: str | None = None
     json_value_count: int | None = None
 
@@ -269,14 +278,18 @@ def classify_grok_structured_stdout(stdout: str) -> GrokStructuredOutcome | None
     raw_payload = raw_grok_structured_payload(value)
     raw_candidates: tuple[tuple[GrokJsonPayload, Any], ...] = ((raw_payload, value),)
     if not isinstance(value, dict):
-        return GrokStructuredOutcome("validate", raw_payload, raw_candidates)
+        return GrokStructuredOutcome("validate", raw_payload, candidates=raw_candidates)
 
     envelope = GrokJsonPayload.from_dict(value)
 
     if is_grok_error_payload(envelope):
         return GrokStructuredOutcome("error", envelope)
     if is_grok_cancelled_payload(envelope):
-        return GrokStructuredOutcome("cancelled", envelope, raw_candidates)
+        return GrokStructuredOutcome(
+            "cancelled",
+            envelope,
+            explicit_raw_candidates=raw_candidates,
+        )
 
     if (
         has_grok_result_envelope_evidence(envelope)
@@ -290,34 +303,45 @@ def classify_grok_structured_stdout(stdout: str) -> GrokStructuredOutcome | None
             return GrokStructuredOutcome(
                 "malformed",
                 envelope,
-                raw_candidates,
+                explicit_raw_candidates=raw_candidates,
                 detail=recovered.detail,
                 json_value_count=recovered.json_value_count,
             )
         if recovered.kind == "not_json":
-            return GrokStructuredOutcome("missing", envelope, raw_candidates)
+            return GrokStructuredOutcome(
+                "missing",
+                envelope,
+                explicit_raw_candidates=raw_candidates,
+            )
         return GrokStructuredOutcome(
             "validate",
             envelope,
-            ((envelope, recovered.value), *raw_candidates),
+            candidates=((envelope, recovered.value),),
+            explicit_raw_candidates=raw_candidates,
         )
 
     if is_grok_structured_output_failure(envelope):
-        return GrokStructuredOutcome("missing", envelope, raw_candidates)
+        return GrokStructuredOutcome(
+            "missing",
+            envelope,
+            explicit_raw_candidates=raw_candidates,
+        )
 
     if is_grok_structured_envelope(envelope):
-        # Clear envelope: prefer its structuredOutput, fall back to the raw value.
+        # Clear envelope: validate its structuredOutput first. The whole outer
+        # object is eligible only when the schema explicitly models its keys.
         return GrokStructuredOutcome(
             "validate",
             raw_payload,
-            ((envelope, envelope.structured_output), *raw_candidates),
+            candidates=((envelope, envelope.structured_output),),
+            explicit_raw_candidates=raw_candidates,
         )
 
     # Raw schema value; still accept an envelope's structuredOutput as a fallback.
     candidates = raw_candidates
     if envelope.has_structured_output:
         candidates = (*candidates, (envelope, envelope.structured_output))
-    return GrokStructuredOutcome("validate", raw_payload, candidates)
+    return GrokStructuredOutcome("validate", raw_payload, candidates=candidates)
 
 
 def summarize_grok_error_text(

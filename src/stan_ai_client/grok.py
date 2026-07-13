@@ -28,7 +28,7 @@ from .exceptions import (
 from .grok_parser import (
     GrokStructuredOutcome,
     classify_grok_structured_stdout,
-    is_grok_cancelled_payload,
+    has_grok_cancelled_stop_reason,
     is_grok_error_payload,
     summarize_grok_error_text,
     try_parse_grok_json_payload,
@@ -258,7 +258,7 @@ class GrokClient:
                 payload=self._stamp(outcome.payload, metadata),
             )
 
-        if outcome.kind != "validate" and outcome.candidates:
+        if outcome.kind != "validate" and outcome.explicit_raw_candidates:
             recovered = self._recover_raw_structured_output(
                 schema=schema,
                 outcome=outcome,
@@ -303,8 +303,8 @@ class GrokClient:
 
         Grok envelope fields are ordinary JSON keys, so a schema that models them
         yields a value the parser cannot tell apart from control metadata. Every
-        failure outcome that carries candidates gets its one recovery attempt
-        here, which keeps the failure kinds from drifting apart.
+        failure outcome that carries an explicit raw candidate gets its one
+        recovery attempt here, which keeps the failure kinds from drifting apart.
         """
         validated = self._validate_explicit_raw_candidate(
             schema=schema,
@@ -330,7 +330,7 @@ class GrokClient:
         outcome: GrokStructuredOutcome,
         metadata: CommandMetadata,
     ) -> tuple[GrokJsonPayload, TStructured] | None:
-        for candidate_payload, value in outcome.candidates:
+        for candidate_payload, value in outcome.explicit_raw_candidates:
             if not self._schema_mentions_raw_value_keys(schema, value):
                 continue
             try:
@@ -369,6 +369,14 @@ class GrokClient:
                     first_value = value
                 continue
             return self._stamp(candidate_payload, metadata), structured_output
+
+        explicit_raw = self._validate_explicit_raw_candidate(
+            schema=schema,
+            outcome=outcome,
+            metadata=metadata,
+        )
+        if explicit_raw is not None:
+            return explicit_raw
 
         assert first_error is not None  # candidates is never empty in "validate" outcomes
         self._raise_structured_validation_error(
@@ -686,7 +694,7 @@ class GrokClient:
                 payload=payload,
             )
 
-        if is_grok_cancelled_payload(payload):
+        if has_grok_cancelled_stop_reason(payload):
             cancelled_error = self._build_cancelled_error(
                 metadata,
                 stdout=stdout,
