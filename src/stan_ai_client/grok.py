@@ -407,9 +407,15 @@ class GrokClient:
             instance=value,
             branch_is_valid=branch_is_valid,
         )
-        if recovery_keys is not None:
-            mentioned_keys.intersection_update(recovery_keys)
-        return bool(mentioned_keys.intersection(value))
+        if recovery_keys is None:
+            return bool(mentioned_keys.intersection(value))
+
+        # Cancellation recovery needs stronger evidence than other raw-envelope
+        # escape hatches: modeling its signal alone must not let default
+        # additional-properties behavior swallow the rest of a control envelope.
+        return bool(mentioned_keys.intersection(recovery_keys)) and set(value).issubset(
+            mentioned_keys
+        )
 
     def _validate_structured_candidates(
         self,

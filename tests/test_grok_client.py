@@ -644,6 +644,30 @@ def test_unrelated_schema_key_does_not_recover_cancellation(mock_exec: Mock) -> 
         GrokClient().run_structured("return object", schema=schema)
 
 
+@patch("stan_ai_client.grok.execute_command")
+def test_cancellation_recovery_requires_every_raw_key_be_modeled(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "stopReason": "Cancelled",
+            "cancellationCategory": "permission_cancelled",
+            "structuredOutput": None,
+        }
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"stopReason": {"type": "string"}},
+        }
+    )
+    with pytest.raises(GrokCancelledError):
+        GrokClient().run_structured("return object", schema=schema)
+
+
 @pytest.mark.parametrize(
     "raw_value",
     [
