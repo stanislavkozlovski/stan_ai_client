@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Generic, Literal, Mapping, TypeVar
@@ -87,6 +88,12 @@ class GrokRunOptions:
 
     Prompt delivery (stdin vs argv) is handled transparently by GrokClient.
     No input_mode is exposed. Use --prompt-file automatically for very long prompts.
+
+    ``tools`` and ``excluded_tools`` control which built-in tools the model can
+    see. ``permission_allow_rules`` and ``permission_deny_rules`` instead decide
+    whether visible tool calls are approved. The legacy ``allowed_tools`` and
+    ``disallowed_tools`` names remain permission-rule aliases for compatibility;
+    they never filter the visible tool inventory.
     """
 
     cwd: str | Path | None = None
@@ -105,6 +112,41 @@ class GrokRunOptions:
     max_turns: int | None = None
     extra_args: tuple[str, ...] | None = None
     env: Mapping[str, str] | None = None
+    # Appended to preserve every positional slot from the original public API.
+    permission_allow_rules: tuple[str, ...] | None = None
+    permission_deny_rules: tuple[str, ...] | None = None
+    excluded_tools: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        aliases = (
+            (
+                "allowed_tools",
+                self.allowed_tools,
+                "permission_allow_rules",
+                self.permission_allow_rules,
+            ),
+            (
+                "disallowed_tools",
+                self.disallowed_tools,
+                "permission_deny_rules",
+                self.permission_deny_rules,
+            ),
+        )
+        for legacy_name, legacy_value, canonical_name, canonical_value in aliases:
+            if legacy_value is None:
+                continue
+            if canonical_value is not None:
+                raise ValueError(
+                    f"GrokRunOptions cannot set both {legacy_name} and {canonical_name}"
+                )
+            warnings.warn(
+                f"GrokRunOptions.{legacy_name} is a deprecated permission-rule "
+                f"alias; use {canonical_name}. Use tools/excluded_tools to filter "
+                "the built-in tool inventory.",
+                DeprecationWarning,
+                # warn -> __post_init__ -> generated __init__ -> the caller.
+                stacklevel=3,
+            )
 
 
 @dataclass(frozen=True)
@@ -236,6 +278,15 @@ class GrokJsonPayload:
     def has_structured_output(self) -> bool:
         return self._structured_output_present
 
+    @property
+    def cancellation_category(self) -> str | None:
+        value = _first_present(
+            self.extras,
+            "cancellationCategory",
+            "cancellation_category",
+        )
+        return value if isinstance(value, str) else None
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GrokJsonPayload":
         # Grok uses camelCase in JSON: stopReason, sessionId, structuredOutput
@@ -252,16 +303,18 @@ class GrokJsonPayload:
             "structured_output",
             "duration_ms",
         }
+        text = data.get("text")
         stop_reason = _first_present(data, "stopReason", "stop_reason")
         session_id = _first_present(data, "sessionId", "session_id")
         request_id = _first_present(data, "requestId", "request_id")
+        thought = data.get("thought")
         structured_output = _first_present(data, "structuredOutput", "structured_output")
         return cls(
-            text=data.get("text"),
-            stop_reason=stop_reason,
-            session_id=session_id,
-            request_id=request_id,
-            thought=data.get("thought"),
+            text=text if isinstance(text, str) else None,
+            stop_reason=stop_reason if isinstance(stop_reason, str) else None,
+            session_id=session_id if isinstance(session_id, str) else None,
+            request_id=request_id if isinstance(request_id, str) else None,
+            thought=thought if isinstance(thought, str) else None,
             structured_output=structured_output,
             duration_ms=data.get("duration_ms"),
             extras={key: value for key, value in data.items() if key not in used},

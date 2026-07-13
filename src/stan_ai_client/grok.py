@@ -2,19 +2,23 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import tempfile
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 from typing import Any, Callable, Mapping, NoReturn, TypeVar, overload
+from urllib.parse import unquote
 
 from jsonschema.exceptions import ValidationError
 
 from ._options import first_set, first_set_or
 from ._retry import run_with_rate_limit_retry
 from .exceptions import (
+    GrokCancelledError,
     GrokExecutableNotFoundError,
+    GrokMalformedStructuredOutputError,
     GrokProcessError,
     GrokProtocolError,
     GrokRateLimitError,
@@ -25,6 +29,7 @@ from .exceptions import (
 from .grok_parser import (
     GrokStructuredOutcome,
     classify_grok_structured_stdout,
+    is_grok_cancelled_payload,
     is_grok_error_payload,
     summarize_grok_error_text,
     try_parse_grok_json_payload,
@@ -68,9 +73,10 @@ class ResolvedGrokRunOptions:
     session_id: str | None
     continue_last_session: bool
     fork_session: bool
-    allowed_tools: tuple[str, ...] | None
-    disallowed_tools: tuple[str, ...] | None
+    permission_allow_rules: tuple[str, ...] | None
+    permission_deny_rules: tuple[str, ...] | None
     tools: tuple[str, ...] | None
+    excluded_tools: tuple[str, ...] | None
     system_prompt: str | None
     add_dirs: tuple[str | Path, ...] | None
     max_turns: int | None
@@ -253,15 +259,15 @@ class GrokClient:
                 payload=self._stamp(outcome.payload, metadata),
             )
 
-        if outcome.kind == "missing":
-            raw_validation = self._validate_explicit_raw_missing_candidate(
+        if outcome.kind != "validate" and outcome.candidates:
+            validated = self._validate_failure_candidates(
                 schema=schema,
                 outcome=outcome,
                 metadata=metadata,
             )
-            if raw_validation is not None:
-                payload, structured_output = raw_validation
-                self.logger.debug("Grok raw structured output validation succeeded")
+            if validated is not None:
+                payload, structured_output = validated
+                self.logger.debug("Grok null structuredOutput validation succeeded")
                 return self._build_structured_result(
                     completed=completed,
                     metadata=metadata,
@@ -269,16 +275,23 @@ class GrokClient:
                     structured_output=structured_output,
                 )
 
-            self.logger.debug("Grok structuredOutput missing")
-            missing_error = GrokStructuredOutputMissingError(
-                "Grok did not return structuredOutput in structured mode",
-                command=metadata,
+        if outcome.kind != "validate" and outcome.explicit_raw_candidates:
+            recovered = self._recover_raw_structured_output(
+                schema=schema,
+                outcome=outcome,
+                completed=completed,
+                metadata=metadata,
+            )
+            if recovered is not None:
+                return recovered
+
+        if outcome.kind != "validate":
+            self._raise_structured_failure(
+                outcome,
+                metadata=metadata,
                 stdout=stdout,
                 stderr=stderr,
-                payload=self._stamp(outcome.payload, metadata),
             )
-            self._log_protocol_error(missing_error)
-            raise missing_error
 
         payload, structured_output = self._validate_structured_candidates(
             schema=schema,
@@ -295,19 +308,71 @@ class GrokClient:
             structured_output=structured_output,
         )
 
-    def _validate_explicit_raw_missing_candidate(
+    def _recover_raw_structured_output(
+        self,
+        *,
+        schema: StructuredSchema[TStructured],
+        outcome: GrokStructuredOutcome,
+        completed: CompletedProcess[str],
+        metadata: CommandMetadata,
+    ) -> GrokStructuredRunResult[TStructured] | None:
+        """Accept a failing outcome's raw value when it is really the caller's schema object.
+
+        Grok envelope fields are ordinary JSON keys, so a schema that models them
+        yields a value the parser cannot tell apart from control metadata. Every
+        failure outcome that carries an explicit raw candidate gets its one
+        recovery attempt here, which keeps the failure kinds from drifting apart.
+        """
+        validated = self._validate_explicit_raw_candidate(
+            schema=schema,
+            outcome=outcome,
+            metadata=metadata,
+        )
+        if validated is None:
+            return None
+
+        payload, structured_output = validated
+        self.logger.debug("Grok raw structured output validation succeeded")
+        return self._build_structured_result(
+            completed=completed,
+            metadata=metadata,
+            payload=payload,
+            structured_output=structured_output,
+        )
+
+    def _validate_failure_candidates(
         self,
         *,
         schema: StructuredSchema[TStructured],
         outcome: GrokStructuredOutcome,
         metadata: CommandMetadata,
     ) -> tuple[GrokJsonPayload, TStructured] | None:
+        """Try ordinary values retained by an otherwise failing classification."""
         for candidate_payload, value in outcome.candidates:
-            if not self._schema_mentions_raw_value_keys(schema, value):
-                continue
             try:
                 structured_output = schema.validate_response(value)
             except ValidationError:
+                continue
+            return self._stamp(candidate_payload, metadata), structured_output
+        return None
+
+    def _validate_explicit_raw_candidate(
+        self,
+        *,
+        schema: StructuredSchema[TStructured],
+        outcome: GrokStructuredOutcome,
+        metadata: CommandMetadata,
+    ) -> tuple[GrokJsonPayload, TStructured] | None:
+        for candidate_payload, value in outcome.explicit_raw_candidates:
+            try:
+                structured_output = schema.validate_response(value)
+            except ValidationError:
+                continue
+            if not self._schema_mentions_raw_value_keys(
+                schema,
+                value,
+                recovery_keys=outcome.explicit_raw_recovery_keys,
+            ):
                 continue
             return self._stamp(candidate_payload, metadata), structured_output
         return None
@@ -316,20 +381,41 @@ class GrokClient:
     def _schema_mentions_raw_value_keys(
         schema: StructuredSchema[Any],
         value: Any,
+        *,
+        recovery_keys: frozenset[str] | None,
     ) -> bool:
         if not isinstance(value, dict):
             return False
 
-        mentioned_keys: set[str] = set()
-        properties = schema.schema.get("properties")
-        if isinstance(properties, dict):
-            mentioned_keys.update(key for key in properties if isinstance(key, str))
+        def branch_is_valid(branch: Any) -> bool:
+            if _has_external_schema_ref(branch):
+                return False
+            try:
+                return bool(
+                    schema._validator.evolve(schema=branch).is_valid(value)  # noqa: SLF001
+                )
+            except Exception:
+                # Raw recovery is a fail-closed ambiguity guard. The root schema
+                # already validated; an unevaluated branch may still contain an
+                # external or otherwise unresolvable reference, which must not
+                # turn a control envelope into a success or a new client crash.
+                return False
 
-        required = schema.schema.get("required")
-        if isinstance(required, list):
-            mentioned_keys.update(key for key in required if isinstance(key, str))
+        mentioned_keys = _schema_instance_object_keys(
+            schema.schema,
+            root=schema.schema,
+            instance=value,
+            branch_is_valid=branch_is_valid,
+        )
+        if recovery_keys is None:
+            return bool(mentioned_keys.intersection(value))
 
-        return bool(mentioned_keys.intersection(value))
+        # Cancellation recovery needs stronger evidence than other raw-envelope
+        # escape hatches: modeling its signal alone must not let default
+        # additional-properties behavior swallow the rest of a control envelope.
+        return bool(mentioned_keys.intersection(recovery_keys)) and set(value).issubset(
+            mentioned_keys
+        )
 
     def _validate_structured_candidates(
         self,
@@ -340,14 +426,24 @@ class GrokClient:
         metadata: CommandMetadata,
     ) -> tuple[GrokJsonPayload, TStructured]:
         first_error: ValidationError | None = None
+        first_value: object | None = None
         for candidate_payload, value in outcome.candidates:
             try:
                 structured_output = schema.validate_response(value)
             except ValidationError as exc:
                 if first_error is None:
                     first_error = exc
+                    first_value = value
                 continue
             return self._stamp(candidate_payload, metadata), structured_output
+
+        explicit_raw = self._validate_explicit_raw_candidate(
+            schema=schema,
+            outcome=outcome,
+            metadata=metadata,
+        )
+        if explicit_raw is not None:
+            return explicit_raw
 
         assert first_error is not None  # candidates is never empty in "validate" outcomes
         self._raise_structured_validation_error(
@@ -355,6 +451,7 @@ class GrokClient:
             completed=completed,
             metadata=metadata,
             payload=self._stamp(outcome.payload, metadata),
+            structured_output=first_value,
         )
 
     def _build_structured_result(
@@ -382,6 +479,57 @@ class GrokClient:
         )
         return result
 
+    def _raise_structured_failure(
+        self,
+        outcome: GrokStructuredOutcome,
+        *,
+        metadata: CommandMetadata,
+        stdout: str,
+        stderr: str,
+    ) -> NoReturn:
+        """Raise the typed error for a structured outcome that yielded no value.
+
+        Handles the "cancelled", "malformed" and "missing" kinds; "error" is
+        raised as a process error before recovery is attempted, and "validate"
+        never reaches here.
+        """
+        payload = self._stamp(outcome.payload, metadata)
+
+        if outcome.kind == "cancelled":
+            cancelled_error = self._build_cancelled_error(
+                metadata,
+                stdout=stdout,
+                stderr=stderr,
+                payload=payload,
+            )
+            self._log_cancelled_error(cancelled_error)
+            raise cancelled_error
+
+        if outcome.kind == "malformed":
+            detail = outcome.detail or "Grok returned malformed structured output"
+            malformed_error = GrokMalformedStructuredOutputError(
+                f"Grok structured output was malformed: {detail}",
+                command=metadata,
+                stdout=stdout,
+                stderr=stderr,
+                payload=payload,
+                detail=detail,
+                json_value_count=outcome.json_value_count,
+            )
+            self._log_protocol_error(malformed_error)
+            raise malformed_error
+
+        self.logger.debug("Grok structuredOutput missing")
+        missing_error = GrokStructuredOutputMissingError(
+            "Grok did not return structuredOutput in structured mode",
+            command=metadata,
+            stdout=stdout,
+            stderr=stderr,
+            payload=payload,
+        )
+        self._log_protocol_error(missing_error)
+        raise missing_error
+
     def _raise_structured_validation_error(
         self,
         *,
@@ -389,6 +537,7 @@ class GrokClient:
         completed: CompletedProcess[str],
         metadata: CommandMetadata,
         payload: GrokJsonPayload,
+        structured_output: object,
     ) -> NoReturn:
         self.logger.debug("Grok structuredOutput validation failed error=%s", schema_error.message)
         error = GrokStructuredOutputValidationError(
@@ -397,7 +546,7 @@ class GrokClient:
             stdout=completed.stdout,
             stderr=completed.stderr,
             payload=payload,
-            structured_output=payload.structured_output,
+            structured_output=structured_output,
         )
         self._log_protocol_error(error)
         raise error from schema_error
@@ -464,14 +613,16 @@ class GrokClient:
         if effective.effort is not None:
             argv.extend(["--effort", effective.effort])
 
-        if effective.allowed_tools is not None:
-            for rule in effective.allowed_tools:
+        if effective.permission_allow_rules is not None:
+            for rule in effective.permission_allow_rules:
                 argv.extend(["--allow", rule])
-        if effective.disallowed_tools is not None:
-            for rule in effective.disallowed_tools:
+        if effective.permission_deny_rules is not None:
+            for rule in effective.permission_deny_rules:
                 argv.extend(["--deny", rule])
         if effective.tools is not None:
             argv.extend(["--tools", ",".join(effective.tools)])
+        if effective.excluded_tools is not None:
+            argv.extend(["--disallowed-tools", ",".join(effective.excluded_tools)])
         if effective.permission_mode is not None:
             argv.extend(["--permission-mode", effective.permission_mode])
         if effective.system_prompt is not None:
@@ -610,7 +761,46 @@ class GrokClient:
                 payload=payload,
             )
 
+        if is_grok_cancelled_payload(payload):
+            cancelled_error = self._build_cancelled_error(
+                metadata,
+                stdout=stdout,
+                stderr=stderr,
+                payload=payload,
+            )
+            self._log_cancelled_error(cancelled_error)
+            raise cancelled_error
+
         return completed, metadata, payload
+
+    def _build_cancelled_error(
+        self,
+        command: CommandMetadata,
+        *,
+        stdout: str,
+        stderr: str,
+        payload: GrokJsonPayload,
+    ) -> GrokCancelledError:
+        details = [f"stopReason={payload.stop_reason or 'unknown'}"]
+        if payload.cancellation_category is not None:
+            details.append(f"category={payload.cancellation_category}")
+        return GrokCancelledError(
+            f"Grok turn was cancelled ({', '.join(details)})",
+            command=command,
+            stdout=stdout,
+            stderr=stderr,
+            payload=payload,
+        )
+
+    def _log_cancelled_error(self, error: GrokCancelledError) -> None:
+        self.logger.warning(
+            "Grok turn cancelled returncode=%d elapsed_ms=%.0f "
+            "stop_reason=%s cancellation_category=%s",
+            error.returncode,
+            error.command.elapsed_ms,
+            error.stop_reason,
+            error.cancellation_category,
+        )
 
     def _build_process_error(
         self,
@@ -683,9 +873,14 @@ class GrokClient:
             fork_session=first_set_or(
                 override.fork_session, default.fork_session, default=False
             ),
-            allowed_tools=first_set(override.allowed_tools, default.allowed_tools),
-            disallowed_tools=first_set(override.disallowed_tools, default.disallowed_tools),
+            permission_allow_rules=first_set(
+                _permission_allow_rules(override), _permission_allow_rules(default)
+            ),
+            permission_deny_rules=first_set(
+                _permission_deny_rules(override), _permission_deny_rules(default)
+            ),
             tools=first_set(override.tools, default.tools),
+            excluded_tools=first_set(override.excluded_tools, default.excluded_tools),
             system_prompt=first_set(override.system_prompt, default.system_prompt),
             add_dirs=first_set(override.add_dirs, default.add_dirs),
             max_turns=first_set(override.max_turns, default.max_turns),
@@ -768,11 +963,174 @@ class GrokClient:
             )
 
         return GrokProtocolError(
-            f"Grok returned non-JSON output in {protocol_name}: {stdout.strip()[:500]}",
+            f"Grok returned non-JSON output in {protocol_name} "
+            f"({len(stdout)} stdout characters captured on the exception)",
             command=command,
             stdout=stdout,
             stderr=stderr,
         )
+
+
+def _permission_allow_rules(options: GrokRunOptions) -> tuple[str, ...] | None:
+    """Collapse the deprecated ``allowed_tools`` alias onto the permission rules.
+
+    ``GrokRunOptions`` rejects setting a legacy alias and its canonical field on
+    the same options object, so one source per layer always wins outright.
+    """
+    return first_set(options.permission_allow_rules, options.allowed_tools)
+
+
+def _permission_deny_rules(options: GrokRunOptions) -> tuple[str, ...] | None:
+    """Collapse the deprecated ``disallowed_tools`` alias onto the permission rules."""
+    return first_set(options.permission_deny_rules, options.disallowed_tools)
+
+
+def _schema_instance_object_keys(
+    schema: Any,
+    *,
+    root: dict[str, Any],
+    instance: dict[str, Any],
+    branch_is_valid: Callable[[Any], bool],
+    seen: frozenset[int] | None = None,
+) -> set[str]:
+    """Collect keys declared along schema branches that validate this instance."""
+    if not isinstance(schema, dict):
+        return set()
+
+    visited = seen if seen is not None else frozenset()
+    identity = id(schema)
+    if identity in visited:
+        return set()
+    visited = visited | {identity}
+
+    keys: set[str] = set()
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        keys.update(key for key in properties if isinstance(key, str))
+
+    required = schema.get("required")
+    if isinstance(required, list):
+        keys.update(key for key in required if isinstance(key, str))
+
+    pattern_properties = schema.get("patternProperties")
+    if isinstance(pattern_properties, dict):
+        for pattern in pattern_properties:
+            if not isinstance(pattern, str):
+                continue
+            try:
+                compiled_pattern = re.compile(pattern)
+            except re.error:
+                continue
+            keys.update(key for key in instance if compiled_pattern.search(key))
+
+    referenced = _resolve_local_schema_ref(root, schema.get("$ref"))
+    if referenced is not None:
+        keys.update(
+            _schema_instance_object_keys(
+                referenced,
+                root=root,
+                instance=instance,
+                branch_is_valid=branch_is_valid,
+                seen=visited,
+            )
+        )
+
+    for keyword in ("allOf", "anyOf", "oneOf"):
+        branches = schema.get(keyword)
+        if isinstance(branches, list):
+            for branch in branches:
+                if branch_is_valid(branch):
+                    keys.update(
+                        _schema_instance_object_keys(
+                            branch,
+                            root=root,
+                            instance=instance,
+                            branch_is_valid=branch_is_valid,
+                            seen=visited,
+                        )
+                    )
+
+    conditional = schema.get("if")
+    if conditional is not None and ("then" in schema or "else" in schema):
+        condition_matches = branch_is_valid(conditional)
+        if condition_matches:
+            keys.update(
+                _schema_instance_object_keys(
+                    conditional,
+                    root=root,
+                    instance=instance,
+                    branch_is_valid=branch_is_valid,
+                    seen=visited,
+                )
+            )
+        selected = schema.get("then" if condition_matches else "else")
+        if selected is not None and branch_is_valid(selected):
+            keys.update(
+                _schema_instance_object_keys(
+                    selected,
+                    root=root,
+                    instance=instance,
+                    branch_is_valid=branch_is_valid,
+                    seen=visited,
+                )
+            )
+
+    dependent_schemas = schema.get("dependentSchemas")
+    if isinstance(dependent_schemas, dict):
+        for key, dependent_schema in dependent_schemas.items():
+            if not isinstance(key, str) or key not in instance:
+                continue
+            keys.add(key)
+            if branch_is_valid(dependent_schema):
+                keys.update(
+                    _schema_instance_object_keys(
+                        dependent_schema,
+                        root=root,
+                        instance=instance,
+                        branch_is_valid=branch_is_valid,
+                        seen=visited,
+                    )
+                )
+
+    dependent_required = schema.get("dependentRequired")
+    if isinstance(dependent_required, dict):
+        for key, dependencies in dependent_required.items():
+            if not isinstance(key, str) or key not in instance:
+                continue
+            keys.add(key)
+            if isinstance(dependencies, list):
+                keys.update(key for key in dependencies if isinstance(key, str))
+
+    return keys
+
+
+def _has_external_schema_ref(schema: Any) -> bool:
+    """Whether a schema fragment could require fetching a non-local resource."""
+    if isinstance(schema, dict):
+        for keyword in ("$ref", "$dynamicRef", "$recursiveRef"):
+            ref = schema.get(keyword)
+            if isinstance(ref, str) and not ref.startswith("#"):
+                return True
+        return any(_has_external_schema_ref(value) for value in schema.values())
+    if isinstance(schema, list):
+        return any(_has_external_schema_ref(value) for value in schema)
+    return False
+
+
+def _resolve_local_schema_ref(root: dict[str, Any], ref: Any) -> Any | None:
+    """Resolve a local JSON Pointer ref without fetching external schema resources."""
+    if ref == "#":
+        return root
+    if not isinstance(ref, str) or not ref.startswith("#/"):
+        return None
+
+    target: Any = root
+    for encoded_token in ref[2:].split("/"):
+        token = unquote(encoded_token).replace("~1", "/").replace("~0", "~")
+        if not isinstance(target, dict) or token not in target:
+            return None
+        target = target[token]
+    return target
 
 
 def _redact_argv(argv: tuple[str, ...]) -> tuple[str, ...]:

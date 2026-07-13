@@ -266,6 +266,12 @@ result = client.run_json("Summarize this repo.", options=GrokRunOptions(session_
 - `GrokProcessError`: Non-zero exit or error payload from Grok.
 - `GrokRateLimitError`: (subclass of process error) when rate limit text is detected. Users should use `RateLimitRetryPolicy` or inspect `retry_after_seconds` / message and wait.
 - `GrokProtocolError`: Unparseable output when JSON was expected.
+- `GrokCancelledError`: A `GrokProcessError` with logical return code `0` when a
+  zero-exit Grok envelope reports a cancelled turn, including permission
+  cancellation metadata when available. It is deliberately not a protocol
+  error, so generic malformed-output retry handlers do not retry cancellation.
+- `GrokMalformedStructuredOutputError`: Structured content is malformed or
+  contains concatenated top-level JSON values.
 - `GrokStructuredOutputMissingError` / `GrokStructuredOutputValidationError`: Structured mode failures (local validation still occurs).
 - All errors carry `command: CommandMetadata`, `stdout`, `stderr`, and (where applicable) the raw payload.
 

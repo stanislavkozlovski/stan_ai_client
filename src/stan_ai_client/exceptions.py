@@ -285,8 +285,75 @@ class GrokProcessError(ProcessError, GrokCodeError):
     payload: GrokJsonPayload | None
 
 
-class GrokProtocolError(ProtocolError, GrokCodeError):
+class _GrokPayloadMetadata:
+    payload: GrokJsonPayload | None = None
+
+    @property
+    def session_id(self) -> str | None:
+        return None if self.payload is None else self.payload.session_id
+
+    @property
+    def request_id(self) -> str | None:
+        return None if self.payload is None else self.payload.request_id
+
+    @property
+    def stop_reason(self) -> str | None:
+        return None if self.payload is None else self.payload.stop_reason
+
+    @property
+    def cancellation_category(self) -> str | None:
+        return None if self.payload is None else self.payload.cancellation_category
+
+
+class GrokProtocolError(_GrokPayloadMetadata, ProtocolError, GrokCodeError):
     pass
+
+
+class GrokCancelledError(_GrokPayloadMetadata, GrokProcessError):
+    """Grok exited successfully at the process level but cancelled the turn."""
+
+    payload: GrokJsonPayload
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        command: CommandMetadata,
+        stdout: str,
+        stderr: str,
+        payload: GrokJsonPayload,
+    ) -> None:
+        self.payload = payload
+        super().__init__(
+            message,
+            command=command,
+            returncode=0,
+            stdout=stdout,
+            stderr=stderr,
+            payload=payload,
+        )
+
+
+class GrokMalformedStructuredOutputError(GrokProtocolError):
+    """Structured mode returned malformed or concatenated JSON content."""
+
+    payload: GrokJsonPayload
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        command: CommandMetadata,
+        stdout: str,
+        stderr: str,
+        payload: GrokJsonPayload,
+        detail: str,
+        json_value_count: int | None = None,
+    ) -> None:
+        self.payload = payload
+        self.detail = detail
+        self.json_value_count = json_value_count
+        super().__init__(message, command=command, stdout=stdout, stderr=stderr)
 
 
 class GrokStructuredOutputMissingError(
