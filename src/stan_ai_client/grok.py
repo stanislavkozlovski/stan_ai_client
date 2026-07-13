@@ -257,71 +257,23 @@ class GrokClient:
                 payload=self._stamp(outcome.payload, metadata),
             )
 
-        if outcome.kind == "cancelled":
-            raw_validation = self._validate_explicit_raw_candidate(
+        if outcome.kind in ("cancelled", "missing"):
+            recovered = self._recover_raw_structured_output(
                 schema=schema,
                 outcome=outcome,
+                completed=completed,
                 metadata=metadata,
             )
-            if raw_validation is not None:
-                payload, structured_output = raw_validation
-                self.logger.debug("Grok raw structured output validation succeeded")
-                return self._build_structured_result(
-                    completed=completed,
-                    metadata=metadata,
-                    payload=payload,
-                    structured_output=structured_output,
-                )
+            if recovered is not None:
+                return recovered
 
-            cancelled_error = self._build_cancelled_error(
-                metadata,
-                stdout=stdout,
-                stderr=stderr,
-                payload=self._stamp(outcome.payload, metadata),
-            )
-            self._log_cancelled_error(cancelled_error)
-            raise cancelled_error
-
-        if outcome.kind == "malformed":
-            detail = outcome.detail or "Grok returned malformed structured output"
-            malformed_error = GrokMalformedStructuredOutputError(
-                f"Grok structured output was malformed: {detail}",
-                command=metadata,
-                stdout=stdout,
-                stderr=stderr,
-                payload=self._stamp(outcome.payload, metadata),
-                detail=detail,
-                json_value_count=outcome.json_value_count,
-            )
-            self._log_protocol_error(malformed_error)
-            raise malformed_error
-
-        if outcome.kind == "missing":
-            raw_validation = self._validate_explicit_raw_candidate(
-                schema=schema,
-                outcome=outcome,
+        if outcome.kind != "validate":
+            self._raise_structured_failure(
+                outcome,
                 metadata=metadata,
-            )
-            if raw_validation is not None:
-                payload, structured_output = raw_validation
-                self.logger.debug("Grok raw structured output validation succeeded")
-                return self._build_structured_result(
-                    completed=completed,
-                    metadata=metadata,
-                    payload=payload,
-                    structured_output=structured_output,
-                )
-
-            self.logger.debug("Grok structuredOutput missing")
-            missing_error = GrokStructuredOutputMissingError(
-                "Grok did not return structuredOutput in structured mode",
-                command=metadata,
                 stdout=stdout,
                 stderr=stderr,
-                payload=self._stamp(outcome.payload, metadata),
             )
-            self._log_protocol_error(missing_error)
-            raise missing_error
 
         payload, structured_output = self._validate_structured_candidates(
             schema=schema,
@@ -331,6 +283,38 @@ class GrokClient:
         )
         self.logger.debug("Grok structuredOutput validation succeeded")
 
+        return self._build_structured_result(
+            completed=completed,
+            metadata=metadata,
+            payload=payload,
+            structured_output=structured_output,
+        )
+
+    def _recover_raw_structured_output(
+        self,
+        *,
+        schema: StructuredSchema[TStructured],
+        outcome: GrokStructuredOutcome,
+        completed: CompletedProcess[str],
+        metadata: CommandMetadata,
+    ) -> GrokStructuredRunResult[TStructured] | None:
+        """Accept a failing outcome's raw value when it is really the caller's schema object.
+
+        Grok envelope fields are ordinary JSON keys, so a schema that models them
+        yields a value the parser cannot tell apart from control metadata. Every
+        failure outcome that carries candidates gets its one recovery attempt
+        here, which is what keeps "cancelled" and "missing" from drifting apart.
+        """
+        validated = self._validate_explicit_raw_candidate(
+            schema=schema,
+            outcome=outcome,
+            metadata=metadata,
+        )
+        if validated is None:
+            return None
+
+        payload, structured_output = validated
+        self.logger.debug("Grok raw structured output validation succeeded")
         return self._build_structured_result(
             completed=completed,
             metadata=metadata,
@@ -427,6 +411,57 @@ class GrokClient:
             payload=payload,
         )
         return result
+
+    def _raise_structured_failure(
+        self,
+        outcome: GrokStructuredOutcome,
+        *,
+        metadata: CommandMetadata,
+        stdout: str,
+        stderr: str,
+    ) -> NoReturn:
+        """Raise the typed error for a structured outcome that yielded no value.
+
+        Handles the "cancelled", "malformed" and "missing" kinds; "error" is
+        raised as a process error before recovery is attempted, and "validate"
+        never reaches here.
+        """
+        payload = self._stamp(outcome.payload, metadata)
+
+        if outcome.kind == "cancelled":
+            cancelled_error = self._build_cancelled_error(
+                metadata,
+                stdout=stdout,
+                stderr=stderr,
+                payload=payload,
+            )
+            self._log_cancelled_error(cancelled_error)
+            raise cancelled_error
+
+        if outcome.kind == "malformed":
+            detail = outcome.detail or "Grok returned malformed structured output"
+            malformed_error = GrokMalformedStructuredOutputError(
+                f"Grok structured output was malformed: {detail}",
+                command=metadata,
+                stdout=stdout,
+                stderr=stderr,
+                payload=payload,
+                detail=detail,
+                json_value_count=outcome.json_value_count,
+            )
+            self._log_protocol_error(malformed_error)
+            raise malformed_error
+
+        self.logger.debug("Grok structuredOutput missing")
+        missing_error = GrokStructuredOutputMissingError(
+            "Grok did not return structuredOutput in structured mode",
+            command=metadata,
+            stdout=stdout,
+            stderr=stderr,
+            payload=payload,
+        )
+        self._log_protocol_error(missing_error)
+        raise missing_error
 
     def _raise_structured_validation_error(
         self,
@@ -772,12 +807,10 @@ class GrokClient:
                 override.fork_session, default.fork_session, default=False
             ),
             permission_allow_rules=first_set(
-                first_set(override.permission_allow_rules, override.allowed_tools),
-                first_set(default.permission_allow_rules, default.allowed_tools),
+                _permission_allow_rules(override), _permission_allow_rules(default)
             ),
             permission_deny_rules=first_set(
-                first_set(override.permission_deny_rules, override.disallowed_tools),
-                first_set(default.permission_deny_rules, default.disallowed_tools),
+                _permission_deny_rules(override), _permission_deny_rules(default)
             ),
             tools=first_set(override.tools, default.tools),
             excluded_tools=first_set(override.excluded_tools, default.excluded_tools),
@@ -869,6 +902,20 @@ class GrokClient:
             stdout=stdout,
             stderr=stderr,
         )
+
+
+def _permission_allow_rules(options: GrokRunOptions) -> tuple[str, ...] | None:
+    """Collapse the deprecated ``allowed_tools`` alias onto the permission rules.
+
+    ``GrokRunOptions`` rejects setting a legacy alias and its canonical field on
+    the same options object, so one source per layer always wins outright.
+    """
+    return first_set(options.permission_allow_rules, options.allowed_tools)
+
+
+def _permission_deny_rules(options: GrokRunOptions) -> tuple[str, ...] | None:
+    """Collapse the deprecated ``disallowed_tools`` alias onto the permission rules."""
+    return first_set(options.permission_deny_rules, options.disallowed_tools)
 
 
 def _redact_argv(argv: tuple[str, ...]) -> tuple[str, ...]:

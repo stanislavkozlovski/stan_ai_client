@@ -119,7 +119,12 @@ class GrokRunOptions:
 
     def __post_init__(self) -> None:
         aliases = (
-            ("allowed_tools", self.allowed_tools, "permission_allow_rules", self.permission_allow_rules),
+            (
+                "allowed_tools",
+                self.allowed_tools,
+                "permission_allow_rules",
+                self.permission_allow_rules,
+            ),
             (
                 "disallowed_tools",
                 self.disallowed_tools,
@@ -128,18 +133,20 @@ class GrokRunOptions:
             ),
         )
         for legacy_name, legacy_value, canonical_name, canonical_value in aliases:
-            if legacy_value is not None and canonical_value is not None:
+            if legacy_value is None:
+                continue
+            if canonical_value is not None:
                 raise ValueError(
                     f"GrokRunOptions cannot set both {legacy_name} and {canonical_name}"
                 )
-            if legacy_value is not None:
-                warnings.warn(
-                    f"GrokRunOptions.{legacy_name} is a deprecated permission-rule "
-                    f"alias; use {canonical_name}. Use tools/excluded_tools to filter "
-                    "the built-in tool inventory.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
+            warnings.warn(
+                f"GrokRunOptions.{legacy_name} is a deprecated permission-rule "
+                f"alias; use {canonical_name}. Use tools/excluded_tools to filter "
+                "the built-in tool inventory.",
+                DeprecationWarning,
+                # warn -> __post_init__ -> generated __init__ -> the caller.
+                stacklevel=3,
+            )
 
 
 @dataclass(frozen=True)

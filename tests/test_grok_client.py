@@ -117,6 +117,14 @@ def test_permission_rules_and_tool_inventory_use_distinct_flags(mock_exec: Mock)
     assert argv[argv.index("--disallowed-tools") + 1] == "web_fetch,web_search"
 
 
+def test_deprecated_alias_warning_points_at_the_caller() -> None:
+    with pytest.warns(DeprecationWarning) as records:
+        GrokRunOptions(allowed_tools=("Read",))
+
+    # Not the dataclass-generated __init__, which callers cannot act on.
+    assert records[0].filename == __file__
+
+
 def test_grok_options_reject_permission_alias_conflicts() -> None:
     with pytest.raises(ValueError, match="both allowed_tools and permission_allow_rules"):
         GrokRunOptions(
@@ -342,6 +350,24 @@ def test_run_structured_classifies_truncated_direct_stdout(mock_exec: Mock) -> N
 
     assert exc.value.json_value_count == 0
     assert "before completing a top-level value" in exc.value.detail
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_treats_non_ascii_digit_output_as_non_json(mock_exec: Mock) -> None:
+    # "²".isdigit() is True, but a JSON number can only start with an ASCII digit
+    # or "-", so this output never was JSON rather than being malformed JSON.
+    mock_exec.return_value.stdout = "²3 tokens remaining"
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, int]] = StructuredSchema.from_dict(
+        {"type": "object", "properties": {"ans": {"type": "integer"}}}
+    )
+    with pytest.raises(GrokProtocolError) as exc:
+        GrokClient().run_structured("return ans", schema=schema)
+
+    assert not isinstance(exc.value, GrokMalformedStructuredOutputError)
+    assert "non-JSON output" in str(exc.value)
 
 
 @patch("stan_ai_client.grok.execute_command")
