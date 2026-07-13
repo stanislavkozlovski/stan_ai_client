@@ -258,6 +258,21 @@ class GrokClient:
             )
 
         if outcome.kind == "cancelled":
+            raw_validation = self._validate_explicit_raw_candidate(
+                schema=schema,
+                outcome=outcome,
+                metadata=metadata,
+            )
+            if raw_validation is not None:
+                payload, structured_output = raw_validation
+                self.logger.debug("Grok raw structured output validation succeeded")
+                return self._build_structured_result(
+                    completed=completed,
+                    metadata=metadata,
+                    payload=payload,
+                    structured_output=structured_output,
+                )
+
             cancelled_error = self._build_cancelled_error(
                 metadata,
                 stdout=stdout,
@@ -282,7 +297,7 @@ class GrokClient:
             raise malformed_error
 
         if outcome.kind == "missing":
-            raw_validation = self._validate_explicit_raw_missing_candidate(
+            raw_validation = self._validate_explicit_raw_candidate(
                 schema=schema,
                 outcome=outcome,
                 metadata=metadata,
@@ -323,7 +338,7 @@ class GrokClient:
             structured_output=structured_output,
         )
 
-    def _validate_explicit_raw_missing_candidate(
+    def _validate_explicit_raw_candidate(
         self,
         *,
         schema: StructuredSchema[TStructured],

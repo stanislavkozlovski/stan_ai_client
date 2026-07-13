@@ -296,16 +296,18 @@ class GrokJsonPayload:
             "structured_output",
             "duration_ms",
         }
+        text = data.get("text")
         stop_reason = _first_present(data, "stopReason", "stop_reason")
         session_id = _first_present(data, "sessionId", "session_id")
         request_id = _first_present(data, "requestId", "request_id")
+        thought = data.get("thought")
         structured_output = _first_present(data, "structuredOutput", "structured_output")
         return cls(
-            text=data.get("text"),
-            stop_reason=stop_reason,
-            session_id=session_id,
-            request_id=request_id,
-            thought=data.get("thought"),
+            text=text if isinstance(text, str) else None,
+            stop_reason=stop_reason if isinstance(stop_reason, str) else None,
+            session_id=session_id if isinstance(session_id, str) else None,
+            request_id=request_id if isinstance(request_id, str) else None,
+            thought=thought if isinstance(thought, str) else None,
             structured_output=structured_output,
             duration_ms=data.get("duration_ms"),
             extras={key: value for key, value in data.items() if key not in used},

@@ -329,6 +329,46 @@ def test_run_structured_classifies_concatenated_direct_stdout(mock_exec: Mock) -
 
 
 @patch("stan_ai_client.grok.execute_command")
+def test_run_structured_classifies_truncated_direct_stdout(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = '{"ans":'
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, int]] = StructuredSchema.from_dict(
+        {"type": "object", "properties": {"ans": {"type": "integer"}}}
+    )
+    with pytest.raises(GrokMalformedStructuredOutputError) as exc:
+        GrokClient().run_structured("return ans", schema=schema)
+
+    assert exc.value.json_value_count == 0
+    assert "before completing a top-level value" in exc.value.detail
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_classifies_truncated_envelope_text(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "text": '{"ans":',
+            "stopReason": "EndTurn",
+            "sessionId": "s1",
+            "structuredOutput": None,
+        }
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, int]] = StructuredSchema.from_dict(
+        {"type": "object", "properties": {"ans": {"type": "integer"}}}
+    )
+    with pytest.raises(GrokMalformedStructuredOutputError) as exc:
+        GrokClient().run_structured("return ans", schema=schema)
+
+    assert exc.value.json_value_count == 0
+    assert exc.value.session_id == "s1"
+    assert "before completing a top-level value" in exc.value.detail
+
+
+@patch("stan_ai_client.grok.execute_command")
 def test_run_structured_classifies_end_turn_with_null_output_as_missing(
     mock_exec: Mock,
 ) -> None:
@@ -439,6 +479,53 @@ def test_raw_schema_with_cancelled_stop_reason_is_not_control_metadata(
         }
     )
     result = GrokClient().run_structured("return domain state", schema=schema)
+
+    assert result.structured_output == raw_value
+
+
+@pytest.mark.parametrize("identifier", ["sessionId", "requestId"])
+@patch("stan_ai_client.grok.execute_command")
+def test_raw_schema_with_cancelled_stop_reason_and_identifier_is_preserved(
+    mock_exec: Mock,
+    identifier: str,
+) -> None:
+    raw_value = {"stopReason": "Cancelled", identifier: "domain-id"}
+    mock_exec.return_value.stdout = json.dumps(raw_value)
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "stopReason": {"const": "Cancelled"},
+                identifier: {"type": "string"},
+            },
+            "required": ["stopReason", identifier],
+            "additionalProperties": False,
+        }
+    )
+    result = GrokClient().run_structured("return domain state", schema=schema)
+
+    assert result.structured_output == raw_value
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_raw_schema_with_non_string_stop_reason_is_preserved(mock_exec: Mock) -> None:
+    raw_value = {"stopReason": 123}
+    mock_exec.return_value.stdout = json.dumps(raw_value)
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, int]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"stopReason": {"type": "integer"}},
+            "required": ["stopReason"],
+            "additionalProperties": False,
+        }
+    )
+    result = GrokClient().run_structured("return numeric state", schema=schema)
 
     assert result.structured_output == raw_value
 
@@ -720,6 +807,26 @@ def test_run_structured_preserves_raw_envelope_like_keys(mock_exec: Mock) -> Non
     res = client.run_structured("return envelope-like fields", schema=schema)
     assert res.structured_output == {"text": "desc", "structuredOutput": "ok"}
     assert res.payload.structured_output == {"text": "desc", "structuredOutput": "ok"}
+
+
+@pytest.mark.parametrize("text", ['{"ans": 1}', "plain text"])
+@patch("stan_ai_client.grok.execute_command")
+def test_run_structured_preserves_raw_text_only_value_with_null_output(
+    mock_exec: Mock,
+    text: str,
+) -> None:
+    raw_value = {"text": text, "structuredOutput": None}
+    mock_exec.return_value.stdout = json.dumps(raw_value)
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, object]] = StructuredSchema.from_dict(
+        {"type": "object"}
+    )
+    result = GrokClient().run_structured("return raw value", schema=schema)
+
+    assert result.structured_output == raw_value
+    assert result.payload.structured_output == raw_value
 
 
 @patch("stan_ai_client.grok.execute_command")

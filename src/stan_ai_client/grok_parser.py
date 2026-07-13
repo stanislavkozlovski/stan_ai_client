@@ -12,13 +12,8 @@ def is_grok_error_payload(payload: GrokJsonPayload) -> bool:
 
 
 def has_grok_result_envelope_evidence(payload: GrokJsonPayload) -> bool:
-    """True when fields beyond ambiguous schema keys identify a result envelope."""
-    return bool(
-        payload.text is not None
-        or payload.session_id is not None
-        or payload.request_id is not None
-        or payload.cancellation_category is not None
-    )
+    """True when metadata beyond result fields identifies a likely envelope."""
+    return is_grok_envelope_metadata(payload) or payload.cancellation_category is not None
 
 
 def is_grok_cancelled_payload(payload: GrokJsonPayload) -> bool:
@@ -28,7 +23,7 @@ def is_grok_cancelled_payload(payload: GrokJsonPayload) -> bool:
     require additional envelope evidence before treating that value as control
     metadata.
     """
-    if payload.stop_reason is None or payload.stop_reason.casefold() not in {
+    if not isinstance(payload.stop_reason, str) or payload.stop_reason.casefold() not in {
         "canceled",
         "cancelled",
     }:
@@ -113,7 +108,7 @@ class GrokStructuredOutcome:
     - ``"error"``: ``payload`` is a Grok ``{"type": "error"}`` envelope; raise a
       process error even when the CLI exited ``0``.
     - ``"cancelled"``: the envelope's stop reason says the turn was cancelled;
-      raise a cancellation error before attempting schema validation.
+      raise a cancellation error unless an explicit raw candidate validates.
     - ``"malformed"``: Grok returned structured text that is not exactly one JSON
       value. ``json_value_count`` distinguishes concatenated roots when known.
     - ``"missing"``: ``payload`` is an envelope that produced no structuredOutput;
@@ -158,12 +153,32 @@ def _payload_for_json_value(value: Any) -> GrokJsonPayload:
     return raw_grok_structured_payload(value)
 
 
+def _looks_like_json_value_start(raw: str) -> bool:
+    stripped = raw.lstrip()
+    if not stripped:
+        return False
+    if stripped[0] in '{["-' or stripped[0].isdigit():
+        return True
+    return any(literal.startswith(stripped) for literal in ("true", "false", "null"))
+
+
 def _malformed_json_sequence_outcome(
+    raw: str,
     values: tuple[Any, ...],
     error: json.JSONDecodeError | None,
 ) -> GrokStructuredOutcome | None:
     if not values:
-        return None
+        if error is None or not _looks_like_json_value_start(raw):
+            return None
+        return GrokStructuredOutcome(
+            "malformed",
+            raw_grok_structured_payload(None),
+            detail=(
+                "Grok returned malformed JSON at character "
+                f"{error.pos} before completing a top-level value"
+            ),
+            json_value_count=0,
+        )
     count = len(values)
     if count == 1:
         if error is None:
@@ -196,7 +211,7 @@ def classify_grok_structured_stdout(stdout: str) -> GrokStructuredOutcome | None
         value = json.loads(raw)
     except json.JSONDecodeError:
         values, sequence_error = _decode_json_sequence(raw)
-        return _malformed_json_sequence_outcome(values, sequence_error)
+        return _malformed_json_sequence_outcome(raw, values, sequence_error)
 
     raw_payload = raw_grok_structured_payload(value)
     envelope = GrokJsonPayload.from_dict(value) if isinstance(value, dict) else None
@@ -204,7 +219,11 @@ def classify_grok_structured_stdout(stdout: str) -> GrokStructuredOutcome | None
     if envelope is not None and is_grok_error_payload(envelope):
         return GrokStructuredOutcome("error", envelope)
     if envelope is not None and is_grok_cancelled_payload(envelope):
-        return GrokStructuredOutcome("cancelled", envelope)
+        return GrokStructuredOutcome(
+            "cancelled",
+            envelope,
+            ((raw_payload, raw_payload.structured_output),),
+        )
 
     if (
         envelope is not None
@@ -220,7 +239,11 @@ def classify_grok_structured_stdout(stdout: str) -> GrokStructuredOutcome | None
             )
 
         text_values, text_error = _decode_json_sequence(envelope.text)
-        malformed = _malformed_json_sequence_outcome(text_values, text_error)
+        malformed = _malformed_json_sequence_outcome(
+            envelope.text,
+            text_values,
+            text_error,
+        )
         if malformed is not None:
             return GrokStructuredOutcome(
                 "malformed",
