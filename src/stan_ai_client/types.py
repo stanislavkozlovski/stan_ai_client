@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Generic, Literal, Mapping, TypeVar
@@ -91,9 +90,7 @@ class GrokRunOptions:
 
     ``tools`` and ``excluded_tools`` control which built-in tools the model can
     see. ``permission_allow_rules`` and ``permission_deny_rules`` instead decide
-    whether visible tool calls are approved. The legacy ``allowed_tools`` and
-    ``disallowed_tools`` names remain permission-rule aliases for compatibility;
-    they never filter the visible tool inventory.
+    whether visible tool calls are approved.
     """
 
     cwd: str | Path | None = None
@@ -104,49 +101,15 @@ class GrokRunOptions:
     session_id: str | None = None
     continue_last_session: bool | None = None
     fork_session: bool | None = None
-    allowed_tools: tuple[str, ...] | None = None
-    disallowed_tools: tuple[str, ...] | None = None
+    permission_allow_rules: tuple[str, ...] | None = None
+    permission_deny_rules: tuple[str, ...] | None = None
     tools: tuple[str, ...] | None = None
+    excluded_tools: tuple[str, ...] | None = None
     system_prompt: str | None = None
     add_dirs: tuple[str | Path, ...] | None = None
     max_turns: int | None = None
     extra_args: tuple[str, ...] | None = None
     env: Mapping[str, str] | None = None
-    # Appended to preserve every positional slot from the original public API.
-    permission_allow_rules: tuple[str, ...] | None = None
-    permission_deny_rules: tuple[str, ...] | None = None
-    excluded_tools: tuple[str, ...] | None = None
-
-    def __post_init__(self) -> None:
-        aliases = (
-            (
-                "allowed_tools",
-                self.allowed_tools,
-                "permission_allow_rules",
-                self.permission_allow_rules,
-            ),
-            (
-                "disallowed_tools",
-                self.disallowed_tools,
-                "permission_deny_rules",
-                self.permission_deny_rules,
-            ),
-        )
-        for legacy_name, legacy_value, canonical_name, canonical_value in aliases:
-            if legacy_value is None:
-                continue
-            if canonical_value is not None:
-                raise ValueError(
-                    f"GrokRunOptions cannot set both {legacy_name} and {canonical_name}"
-                )
-            warnings.warn(
-                f"GrokRunOptions.{legacy_name} is a deprecated permission-rule "
-                f"alias; use {canonical_name}. Use tools/excluded_tools to filter "
-                "the built-in tool inventory.",
-                DeprecationWarning,
-                # warn -> __post_init__ -> generated __init__ -> the caller.
-                stacklevel=3,
-            )
 
 
 @dataclass(frozen=True)

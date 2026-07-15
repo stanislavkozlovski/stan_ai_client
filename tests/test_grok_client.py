@@ -75,11 +75,10 @@ def test_policy_rules_are_repeated_flags(mock_exec: Mock) -> None:
     mock_exec.return_value.stderr = ""
     mock_exec.return_value.returncode = 0
 
-    with pytest.warns(DeprecationWarning, match="deprecated permission-rule alias"):
-        options = GrokRunOptions(
-            allowed_tools=("Bash(git *)", "Read"),
-            disallowed_tools=("Write", "Edit"),
-        )
+    options = GrokRunOptions(
+        permission_allow_rules=("Bash(git *)", "Read"),
+        permission_deny_rules=("Write", "Edit"),
+    )
 
     client = GrokClient()
     client.run_text("say hi", options=options)
@@ -117,27 +116,6 @@ def test_permission_rules_and_tool_inventory_use_distinct_flags(mock_exec: Mock)
     assert argv[argv.index("--deny") + 1] == "run_terminal_cmd"
     assert argv[argv.index("--tools") + 1] == "read_file,grep,list_dir"
     assert argv[argv.index("--disallowed-tools") + 1] == "web_fetch,web_search"
-
-
-def test_deprecated_alias_warning_points_at_the_caller() -> None:
-    with pytest.warns(DeprecationWarning) as records:
-        GrokRunOptions(allowed_tools=("Read",))
-
-    # Not the dataclass-generated __init__, which callers cannot act on.
-    assert records[0].filename == __file__
-
-
-def test_grok_options_reject_permission_alias_conflicts() -> None:
-    with pytest.raises(ValueError, match="both allowed_tools and permission_allow_rules"):
-        GrokRunOptions(
-            allowed_tools=("legacy",),
-            permission_allow_rules=("canonical",),
-        )
-    with pytest.raises(ValueError, match="both disallowed_tools and permission_deny_rules"):
-        GrokRunOptions(
-            disallowed_tools=("legacy",),
-            permission_deny_rules=("canonical",),
-        )
 
 
 @patch("stan_ai_client.grok.execute_command")
