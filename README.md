@@ -268,8 +268,6 @@ its `detail` and `json_value_count` fields are safe for routine diagnostics.
 Grok permission rules and built-in tool filtering are separate APIs:
 `permission_allow_rules` / `permission_deny_rules` map to `--allow` / `--deny`,
 while `tools` / `excluded_tools` map to `--tools` / `--disallowed-tools`.
-The old `allowed_tools` / `disallowed_tools` names remain deprecated aliases for
-permission rules so existing callers keep their behavior.
 
 ### Logging
 

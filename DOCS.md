@@ -323,17 +323,15 @@ class GrokRunOptions:
     session_id: str | None = None
     continue_last_session: bool | None = None
     fork_session: bool | None = None
-    allowed_tools: tuple[str, ...] | None = None
-    disallowed_tools: tuple[str, ...] | None = None
+    permission_allow_rules: tuple[str, ...] | None = None
+    permission_deny_rules: tuple[str, ...] | None = None
     tools: tuple[str, ...] | None = None
+    excluded_tools: tuple[str, ...] | None = None
     system_prompt: str | None = None
     add_dirs: tuple[str | Path, ...] | None = None
     max_turns: int | None = None
     extra_args: tuple[str, ...] | None = None
     env: Mapping[str, str] | None = None
-    permission_allow_rules: tuple[str, ...] | None = None
-    permission_deny_rules: tuple[str, ...] | None = None
-    excluded_tools: tuple[str, ...] | None = None
 ```
 
 Important mappings:
@@ -350,10 +348,6 @@ Important mappings:
   for the built-in tools visible to Grok
 - `excluded_tools`: `--disallowed-tools <comma-separated-tool-ids>`; removes
   built-in tools from Grok's visible inventory
-- `allowed_tools`: deprecated compatibility alias for `permission_allow_rules`
-- `disallowed_tools`: deprecated compatibility alias for
-  `permission_deny_rules`; despite its historical name, it does not remove
-  tools from the visible inventory
 - `system_prompt`: `--system-prompt-override`
 - `add_dirs`: accepted for API symmetry but not emitted; Grok currently has no
   documented add-directory flag distinct from `--cwd`

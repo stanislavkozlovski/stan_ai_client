@@ -874,10 +874,10 @@ class GrokClient:
                 override.fork_session, default.fork_session, default=False
             ),
             permission_allow_rules=first_set(
-                _permission_allow_rules(override), _permission_allow_rules(default)
+                override.permission_allow_rules, default.permission_allow_rules
             ),
             permission_deny_rules=first_set(
-                _permission_deny_rules(override), _permission_deny_rules(default)
+                override.permission_deny_rules, default.permission_deny_rules
             ),
             tools=first_set(override.tools, default.tools),
             excluded_tools=first_set(override.excluded_tools, default.excluded_tools),
@@ -969,20 +969,6 @@ class GrokClient:
             stdout=stdout,
             stderr=stderr,
         )
-
-
-def _permission_allow_rules(options: GrokRunOptions) -> tuple[str, ...] | None:
-    """Collapse the deprecated ``allowed_tools`` alias onto the permission rules.
-
-    ``GrokRunOptions`` rejects setting a legacy alias and its canonical field on
-    the same options object, so one source per layer always wins outright.
-    """
-    return first_set(options.permission_allow_rules, options.allowed_tools)
-
-
-def _permission_deny_rules(options: GrokRunOptions) -> tuple[str, ...] | None:
-    """Collapse the deprecated ``disallowed_tools`` alias onto the permission rules."""
-    return first_set(options.permission_deny_rules, options.disallowed_tools)
 
 
 def _schema_instance_object_keys(
