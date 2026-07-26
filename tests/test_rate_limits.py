@@ -41,3 +41,15 @@ def test_parse_embedded_timezone_without_losing_case() -> None:
     assert info.reset_at is not None
     assert info.retry_after_seconds == 9060
     assert info.reset_at == datetime(2026, 3, 19, 23, 1, tzinfo=ZoneInfo("UTC"))
+
+
+def test_parse_compact_absolute_time_with_embedded_timezone() -> None:
+    timezone = ZoneInfo("Europe/Madrid")
+    reference = datetime(2026, 7, 24, 17, 41, 11, tzinfo=timezone)
+    info = parse_rate_limit_info(
+        "You've hit your session limit · resets 5:50pm (Europe/Madrid)",
+        now=reference,
+    )
+
+    assert info.retry_after_seconds == 589
+    assert info.reset_at == datetime(2026, 7, 24, 17, 51, tzinfo=timezone)
