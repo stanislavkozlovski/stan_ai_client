@@ -115,7 +115,10 @@ def _parse_absolute_reset(
             timezone_to_use=timezone_to_use,
         )
 
-    match = re.search(r"resets?\s+(?:at\s+)?(\d{1,2}:\d{2})(?:\s|$|\.)", text)
+    match = re.search(
+        r"resets?\s+(?:at\s+)?(\d{1,2}:\d{2})(?!\s*(?:am|pm))(?:\s|$|\.)",
+        text,
+    )
     if match is not None:
         return _time_str_to_datetime(
             match.group(1),

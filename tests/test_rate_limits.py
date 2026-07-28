@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from stan_ai_client import parse_rate_limit_info
 
 
@@ -53,3 +55,38 @@ def test_parse_compact_absolute_time_with_embedded_timezone() -> None:
 
     assert info.retry_after_seconds == 589
     assert info.reset_at == datetime(2026, 7, 24, 17, 51, tzinfo=timezone)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Resets at 5:50 pm",
+        "Resets at 5:50pm",
+        "Resets at 05:50 PM.",
+    ],
+)
+def test_parse_absolute_meridiem_time_variants(message: str) -> None:
+    reference = datetime(2026, 3, 19, 10, 0, tzinfo=ZoneInfo("UTC"))
+
+    info = parse_rate_limit_info(message, now=reference)
+
+    assert info.retry_after_seconds == 28260
+    assert info.reset_at == datetime(2026, 3, 19, 17, 51, tzinfo=ZoneInfo("UTC"))
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Resets at 5:50 pmUTC",
+        "Resets at 5:50 pm2",
+    ],
+)
+def test_malformed_meridiem_suffix_does_not_fall_through_to_24_hour(
+    message: str,
+) -> None:
+    reference = datetime(2026, 3, 19, 10, 0, tzinfo=ZoneInfo("UTC"))
+
+    info = parse_rate_limit_info(message, now=reference)
+
+    assert info.retry_after_seconds is None
+    assert info.reset_at is None
