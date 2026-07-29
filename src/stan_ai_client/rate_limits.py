@@ -154,14 +154,27 @@ def _parse_retry_after_seconds(text: str) -> int | None:
     return int(match.group(1))
 
 
+def _normalize_time_str(time_str: str) -> str:
+    """Canonicalize clock strings before strptime.
+
+    Claude often emits compact meridiem forms such as ``5:50pm`` or
+    ``11:40PM``. ``datetime.strptime`` with ``%I:%M %p`` requires a space
+    before the meridiem, so normalize first. Spaced forms
+    (``5:50 pm``, ``05:50 PM``) stay equivalent.
+    """
+    cleaned = time_str.strip().upper()
+    cleaned = re.sub(r"(?<=\d)(AM|PM)\b", r" \1", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 def _time_str_to_datetime(
     time_str: str,
     *,
     reference: datetime,
     timezone_to_use: tzinfo | None,
 ) -> datetime | None:
-    cleaned = time_str.strip().upper()
-    for fmt in ("%I:%M %p", "%H:%M"):
+    cleaned = _normalize_time_str(time_str)
+    for fmt in ("%I:%M %p", "%I %p", "%H:%M"):
         try:
             parsed = datetime.strptime(cleaned, fmt)
         except ValueError:
