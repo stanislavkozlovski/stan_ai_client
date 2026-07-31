@@ -550,6 +550,7 @@ Provider-specific exceptions remain available:
 - `ClaudeExecutableNotFoundError`
 - `ClaudeTimeoutError`
 - `ClaudeProcessError`
+- `ClaudeNetworkUnavailableError`
 - `ClaudeProtocolError`
 - `ClaudeRateLimitError`
 - `ClaudeStructuredOutputMissingError`
@@ -558,6 +559,7 @@ Provider-specific exceptions remain available:
 - `CodexExecutableNotFoundError`
 - `CodexTimeoutError`
 - `CodexProcessError`
+- `CodexNetworkUnavailableError`
 - `CodexProtocolError`
 - `CodexRateLimitError`
 - `CodexStructuredOutputMissingError`
@@ -566,6 +568,7 @@ Provider-specific exceptions remain available:
 - `GrokExecutableNotFoundError`
 - `GrokTimeoutError`
 - `GrokProcessError`
+- `GrokNetworkUnavailableError`
 - `GrokProtocolError`
 - `GrokRateLimitError`
 - `GrokCancelledError`
@@ -579,6 +582,7 @@ Provider-neutral base classes are also exported:
 - `AIClientTimeoutError`
 - `ExecutableNotFoundError`
 - `ProcessError`
+- `NetworkUnavailableError`
 - `ProtocolError`
 - `SchemaValidationError`
 - `StructuredSchemaValidationError`
@@ -597,6 +601,31 @@ them, while the complete raw streams remain available as `stdout` and `stderr`.
 `GrokMalformedStructuredOutputError` also exposes a safe `detail` and
 `json_value_count`; callers can log those without copying raw model output into
 routine diagnostics.
+
+## Network Availability
+
+`NetworkUnavailableError` is the provider-neutral contract for strong evidence
+that a provider transport is unavailable. The concrete exceptions also
+retain their provider contracts:
+
+- `ClaudeNetworkUnavailableError` is a `ClaudeProcessError` and `ClaudeCodeError`
+- `CodexNetworkUnavailableError` is a `CodexProcessError` and `CodexCodeError`
+- `GrokNetworkUnavailableError` is a `GrokProcessError` and `GrokCodeError`
+
+All four types preserve `command`, `returncode`, `stdout`, `stderr`, and
+`payload`. Classification recognizes strong diagnostics such as DNS lookup or
+temporary name-resolution failure, network unreachable, and no route to host.
+Claude also recognizes its own `Unable to connect to API` and `Connection
+closed mid-response` failures. Classification examines provider-declared error
+payloads or events and guarded process diagnostics. Claude and Grok inspect
+process stderr plus Claude `API Error:` and Grok `Error:` stdout lines. Codex
+inspects JSONL errors and JSON-mode stderr; because text- and structured-mode
+stderr also carries progress, only `ERROR:`-prefixed lines are inspected in
+those modes. Ordinary transcripts, prompts, documentation, diffs, and
+successful output are not searched. Rate-limit evidence on any of those
+diagnostic channels retains precedence. A bare stream disconnect remains the
+provider's ordinary process error. The library does not sleep, retry, or impose
+scheduling policy for this condition.
 
 ## Rate Limits
 

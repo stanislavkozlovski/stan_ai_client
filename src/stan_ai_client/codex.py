@@ -13,14 +13,20 @@ from typing import Any, Callable, Mapping, TypeVar
 from jsonschema.exceptions import ValidationError
 
 from ._options import first_set, first_set_or
+from ._network import (
+    codex_trusted_error_texts,
+    has_network_unavailable_evidence,
+)
 from ._retry import run_with_rate_limit_retry
 from .codex_parser import (
     make_codex_structured_payload,
+    recover_codex_jsonl_prefix_payload,
     summarize_codex_error_text,
     try_parse_codex_jsonl_payload,
 )
 from .exceptions import (
     CodexExecutableNotFoundError,
+    CodexNetworkUnavailableError,
     CodexProcessError,
     CodexProtocolError,
     CodexRateLimitError,
@@ -139,6 +145,7 @@ class CodexClient:
                 stdout=stdout,
                 stderr=stderr,
                 payload=None,
+                human_output=True,
             )
 
         result = TextRunResult(
@@ -180,12 +187,15 @@ class CodexClient:
         payload = try_parse_codex_jsonl_payload(stdout)
 
         if completed.returncode != 0:
+            if payload is None:
+                payload = recover_codex_jsonl_prefix_payload(stdout)
             raise self._build_process_error(
                 metadata,
                 returncode=completed.returncode,
                 stdout=stdout,
                 stderr=stderr,
                 payload=payload,
+                human_output=False,
             )
 
         if payload is None:
@@ -205,6 +215,7 @@ class CodexClient:
                 stdout=stdout,
                 stderr=stderr,
                 payload=payload,
+                human_output=False,
             )
 
         result = CodexJsonRunResult(
@@ -284,6 +295,7 @@ class CodexClient:
                 stdout=stdout,
                 stderr=stderr,
                 payload=None,
+                human_output=True,
             )
 
         if not stdout.strip():
@@ -508,20 +520,30 @@ class CodexClient:
         stdout: str,
         stderr: str,
         payload: CodexJsonPayload | None,
+        human_output: bool,
     ) -> CodexProcessError:
         error_text = summarize_codex_error_text(payload=payload, stdout=stdout, stderr=stderr)
-        if is_rate_limit_text(error_text):
-            rate_limit = parse_rate_limit_info(error_text)
+        trusted_texts = codex_trusted_error_texts(
+            payload=payload,
+            stderr=stderr,
+            human_output=human_output,
+        )
+        rate_limit_text = next(
+            (text for text in (error_text, *trusted_texts) if is_rate_limit_text(text)),
+            None,
+        )
+        if rate_limit_text is not None:
+            rate_limit = parse_rate_limit_info(rate_limit_text)
             self.logger.warning(
                 "Codex run failed returncode=%d elapsed_ms=%.0f error=%s retry_after_seconds=%s reset_at=%s",
                 returncode,
                 command.elapsed_ms,
-                error_text,
+                rate_limit_text,
                 rate_limit.retry_after_seconds,
                 rate_limit.reset_at,
             )
             return CodexRateLimitError(
-                error_text,
+                rate_limit_text,
                 command=command,
                 returncode=returncode,
                 stdout=stdout,
@@ -530,13 +552,24 @@ class CodexClient:
                 rate_limit=rate_limit,
             )
 
-        self.logger.warning(
-            "Codex run failed returncode=%d elapsed_ms=%.0f error=%s",
-            returncode,
-            command.elapsed_ms,
-            error_text,
-        )
-        return CodexProcessError(
+        error_cls: type[CodexProcessError]
+        if has_network_unavailable_evidence(trusted_texts):
+            error_cls = CodexNetworkUnavailableError
+            self.logger.warning(
+                "Codex run failed returncode=%d elapsed_ms=%.0f network_unavailable=true error=%s",
+                returncode,
+                command.elapsed_ms,
+                error_text,
+            )
+        else:
+            error_cls = CodexProcessError
+            self.logger.warning(
+                "Codex run failed returncode=%d elapsed_ms=%.0f error=%s",
+                returncode,
+                command.elapsed_ms,
+                error_text,
+            )
+        return error_cls(
             error_text,
             command=command,
             returncode=returncode,

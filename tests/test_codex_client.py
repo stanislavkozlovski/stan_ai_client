@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 from collections.abc import Mapping
@@ -11,7 +12,9 @@ import pytest
 from stan_ai_client import (
     AIClientTimeoutError,
     CodexClient,
+    CodexCodeError,
     CodexExecutableNotFoundError,
+    CodexNetworkUnavailableError,
     CodexProcessError,
     CodexProtocolError,
     CodexRateLimitError,
@@ -21,9 +24,11 @@ from stan_ai_client import (
     CodexStructuredOutputValidationError,
     CodexTimeoutError,
     ExecutableNotFoundError,
+    NetworkUnavailableError,
     RateLimitRetryPolicy,
     StructuredSchema,
 )
+from stan_ai_client.codex_parser import CODEX_ERROR_EVENT_TYPES
 
 
 class RunRecorder:
@@ -301,6 +306,52 @@ def test_codex_run_text_puts_resume_extra_args_after_resume(
     assert argv[-1] == "-"
 
 
+def test_codex_text_mode_ignores_network_prose_in_progress_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stderr = "\n".join(
+        [
+            "codex",
+            "The documentation says network is unreachable.",
+            "ERROR: permission denied",
+        ]
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=stderr)
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexProcessError) as excinfo:
+        CodexClient().run_text("quote the documentation")
+
+    assert type(excinfo.value) is CodexProcessError
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+    assert excinfo.value.stderr == stderr
+
+
+def test_codex_text_mode_trusts_prefixed_stderr_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    july_31_dns_diagnostic: str,
+) -> None:
+    stderr = "\n".join(
+        [
+            "codex",
+            "partial progress",
+            f"ERROR: {july_31_dns_diagnostic}",
+            "ERROR: stream disconnected",
+        ]
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=stderr)
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexNetworkUnavailableError) as excinfo:
+        CodexClient().run_text("hello")
+
+    assert excinfo.value.stderr == stderr
+
+
 def test_codex_run_json_parses_jsonl_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     stdout = "\n".join(
         [
@@ -369,6 +420,200 @@ def test_codex_run_json_raises_process_error_from_turn_failed(
     assert "permission denied" in str(excinfo.value)
     assert excinfo.value.payload is not None
     assert excinfo.value.payload.error == {"type": "turn.failed", "message": "permission denied"}
+
+
+def test_codex_dns_error_uses_common_and_provider_network_types(
+    monkeypatch: pytest.MonkeyPatch,
+    july_31_dns_diagnostic: str,
+) -> None:
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "error", "message": july_31_dns_diagnostic}),
+            json.dumps(
+                {
+                    "type": "turn.failed",
+                    "error": {"message": "stream disconnected"},
+                }
+            ),
+        ]
+    )
+    stderr = ""
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(NetworkUnavailableError) as excinfo:
+        CodexClient().run_json("hello")
+
+    error = excinfo.value
+    assert isinstance(error, CodexNetworkUnavailableError)
+    assert isinstance(error, CodexProcessError)
+    assert isinstance(error, CodexCodeError)
+    assert error.command.argv[:2] == ("codex", "exec")
+    assert error.returncode == 1
+    assert error.stdout == stdout
+    assert error.stderr == stderr
+    assert error.payload is not None
+    assert error.payload.events[0]["message"] == july_31_dns_diagnostic
+    assert error.payload.error == {
+        "type": "turn.failed",
+        "error": {"message": "stream disconnected"},
+    }
+
+
+@pytest.mark.parametrize("event_type", sorted(CODEX_ERROR_EVENT_TYPES))
+def test_codex_error_event_types_drive_payload_error_and_classification(
+    monkeypatch: pytest.MonkeyPatch,
+    july_31_dns_diagnostic: str,
+    event_type: str,
+) -> None:
+    """The parser's error selection and network classification read one shared
+    event-type set; narrowing either side leaves a parametrized case failing.
+    The diagnostic sits in the earlier event so only the event scan can find it.
+    """
+    diagnostic_event = {"type": event_type, "message": july_31_dns_diagnostic}
+    trailing_event = {"type": event_type, "message": "stream disconnected"}
+    stdout = "\n".join([json.dumps(diagnostic_event), json.dumps(trailing_event)])
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=1, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexNetworkUnavailableError) as excinfo:
+        CodexClient().run_json("hello")
+
+    assert excinfo.value.payload is not None
+    assert excinfo.value.payload.error == trailing_event
+
+
+def test_codex_dns_error_survives_a_truncated_jsonl_tail(
+    monkeypatch: pytest.MonkeyPatch,
+    july_31_dns_diagnostic: str,
+) -> None:
+    error_event = {"type": "error", "message": july_31_dns_diagnostic}
+    stdout = "\n".join([json.dumps(error_event), '{"type":"turn.failed"'])
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=1, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexNetworkUnavailableError) as excinfo:
+        CodexClient().run_json("hello")
+
+    assert excinfo.value.stdout == stdout
+    assert excinfo.value.payload is not None
+    assert excinfo.value.payload.events == (error_event,)
+    assert excinfo.value.payload.error == error_event
+
+
+def test_codex_stderr_rate_limit_precedes_network_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = json.dumps({"type": "error", "message": "Network is unreachable"})
+    stderr = "429 rate limit exceeded, retry after 5"
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexRateLimitError) as excinfo:
+        CodexClient().run_json("hello")
+
+    assert excinfo.value.retry_after_seconds == 65
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+
+
+def test_codex_earlier_rate_limit_event_precedes_later_network_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "error",
+                    "message": "Rate limit exceeded, retry after 5",
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "turn.failed",
+                    "error": {"message": "Network is unreachable"},
+                }
+            ),
+        ]
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=1, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexRateLimitError) as excinfo:
+        CodexClient().run_json("hello")
+
+    assert excinfo.value.retry_after_seconds == 65
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+
+
+def test_codex_ignores_agent_message_network_prose_and_disconnect_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "agent_message",
+                        "text": "diff --git a/doc.md b/doc.md\n+network is unreachable",
+                    },
+                }
+            ),
+            json.dumps({"type": "turn.failed", "message": "stream disconnected"}),
+        ]
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=1, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexProcessError) as excinfo:
+        CodexClient().run_json("quote the diff")
+
+    assert type(excinfo.value) is CodexProcessError
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+
+
+def test_codex_successful_network_prose_is_ordinary_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = json.dumps(
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "agent_message",
+                "text": "The documentation says network is unreachable.",
+            },
+        }
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    result = CodexClient().run_json("quote the documentation")
+
+    assert result.payload.result == "The documentation says network is unreachable."
 
 
 def test_codex_run_json_preserves_recovered_error_event(
@@ -444,6 +689,7 @@ def test_codex_rate_limit_error_is_typed(monkeypatch: pytest.MonkeyPatch) -> Non
         client.run_json("hello")
 
     assert excinfo.value.retry_after_seconds == 65
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
 
 
 def test_codex_run_structured_passes_schema_file_and_validates_output(
@@ -478,6 +724,37 @@ def test_codex_run_structured_passes_schema_file_and_validates_output(
     assert recorder.schema_texts == [schema.cli_json + "\n"]
     assert recorder.schema_paths
     assert not Path(recorder.schema_paths[0]).exists()
+
+
+def test_codex_structured_mode_ignores_network_prose_in_progress_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stderr = "\n".join(
+        [
+            "codex",
+            "The documentation says network is unreachable.",
+            "ERROR: permission denied",
+        ]
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=stderr)
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+            "additionalProperties": False,
+        }
+    )
+
+    with pytest.raises(CodexProcessError) as excinfo:
+        CodexClient().run_structured("quote the documentation", schema=schema)
+
+    assert type(excinfo.value) is CodexProcessError
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+    assert excinfo.value.stderr == stderr
 
 
 def test_codex_run_structured_rejects_non_object_schema(

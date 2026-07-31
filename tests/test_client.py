@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 from collections.abc import Mapping
@@ -9,16 +10,19 @@ import pytest
 
 from stan_ai_client import (
     AIClientTimeoutError,
+    ClaudeCodeError,
     ClaudeCodeClient,
     CommandMetadata,
     ClaudeExecutableNotFoundError,
     ClaudeLimitError,
+    ClaudeNetworkUnavailableError,
     ClaudeProcessError,
     ClaudeProtocolError,
     ClaudeRateLimitError,
     ClaudeStructuredOutputMissingError,
     ClaudeStructuredOutputValidationError,
     ClaudeTimeoutError,
+    NetworkUnavailableError,
     RateLimitInfo,
     RateLimitRetryPolicy,
     RunOptions,
@@ -29,6 +33,7 @@ from stan_ai_client import (
 
 def test_client_module_reexports_legacy_symbols() -> None:
     from stan_ai_client.client import (  # noqa: PLC0415
+        ClaudeNetworkUnavailableError as ClientModuleClaudeNetworkUnavailableError,
         ClaudeProcessError as ClientModuleClaudeProcessError,
         JsonRunResult as ClientModuleJsonRunResult,
         RateLimitRetryPolicy as ClientModuleRateLimitRetryPolicy,
@@ -42,6 +47,7 @@ def test_client_module_reexports_legacy_symbols() -> None:
     assert ClientModuleTextRunResult.__name__ == "TextRunResult"
     assert ClientModuleRateLimitRetryPolicy is RateLimitRetryPolicy
     assert ClientModuleStructuredSchema is StructuredSchema
+    assert ClientModuleClaudeNetworkUnavailableError is ClaudeNetworkUnavailableError
     assert ClientModuleClaudeProcessError is ClaudeProcessError
 
 
@@ -178,6 +184,178 @@ def test_run_json_raises_process_error_with_payload(monkeypatch: pytest.MonkeyPa
     assert excinfo.value.payload.result == "permission denied"
 
 
+def test_claude_dns_error_uses_common_and_provider_network_types(
+    monkeypatch: pytest.MonkeyPatch,
+    july_31_dns_diagnostic: str,
+) -> None:
+    stdout = json.dumps(
+        {
+            "is_error": True,
+            "result": f"{july_31_dns_diagnostic}\nstream disconnected",
+        }
+    )
+    stderr = "provider stream disconnected"
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(NetworkUnavailableError) as excinfo:
+        ClaudeCodeClient().run_json("hello")
+
+    error = excinfo.value
+    assert isinstance(error, ClaudeNetworkUnavailableError)
+    assert isinstance(error, ClaudeProcessError)
+    assert isinstance(error, ClaudeCodeError)
+    assert error.command.argv[0] == "claude"
+    assert error.returncode == 1
+    assert error.stdout == stdout
+    assert error.stderr == stderr
+    assert error.payload is not None
+    assert error.payload.result == f"{july_31_dns_diagnostic}\nstream disconnected"
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        "API Error: Unable to connect to API (ENOTIMP)",
+        "API Error: Connection closed mid-response. The response above may be incomplete.",
+    ],
+)
+def test_claude_api_connection_errors_are_network_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    diagnostic: str,
+) -> None:
+    stdout = json.dumps({"is_error": True, "result": diagnostic})
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=stdout,
+            stderr="",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(ClaudeNetworkUnavailableError) as excinfo:
+        ClaudeCodeClient().run_json("hello")
+
+    assert excinfo.value.payload is not None
+    assert excinfo.value.payload.result == diagnostic
+
+
+def test_claude_text_mode_api_connection_error_is_network_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    diagnostic = "API Error: Unable to connect to API (ENOTIMP)"
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=diagnostic,
+            stderr="",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(ClaudeNetworkUnavailableError):
+        ClaudeCodeClient().run_text("hello")
+
+
+def test_claude_text_mode_detects_api_error_after_partial_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    diagnostic = (
+        "API Error: Connection closed mid-response. The response above may be incomplete."
+    )
+    stdout = f"Partial response\n{diagnostic}"
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=stdout,
+            stderr="",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(ClaudeNetworkUnavailableError) as excinfo:
+        ClaudeCodeClient().run_text("hello")
+
+    assert excinfo.value.stdout == stdout
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        "Temporary failure in name resolution",
+        "Network is unreachable",
+        "No route to host",
+    ],
+)
+def test_claude_strong_stderr_network_diagnostics_are_classified(
+    monkeypatch: pytest.MonkeyPatch,
+    diagnostic: str,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr=diagnostic,
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(ClaudeNetworkUnavailableError):
+        ClaudeCodeClient().run_text("hello")
+
+
+def test_claude_ignores_network_prose_in_stdout_and_disconnect_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = json.dumps(
+        {
+            "is_error": False,
+            "result": "diff --git a/doc.md b/doc.md\n+network is unreachable",
+        }
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=stdout,
+            stderr="stream disconnected",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(ClaudeProcessError) as excinfo:
+        ClaudeCodeClient().run_text("quote the diff")
+
+    assert type(excinfo.value) is ClaudeProcessError
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+
+
+def test_claude_successful_network_prose_is_ordinary_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = "The documentation says network is unreachable.\n"
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    result = ClaudeCodeClient().run_text("quote the documentation")
+
+    assert result.text == stdout.strip()
+
+
 def test_run_json_raises_rate_limit_error(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = RunRecorder(
         subprocess.CompletedProcess(
@@ -194,6 +372,51 @@ def test_run_json_raises_rate_limit_error(monkeypatch: pytest.MonkeyPatch) -> No
         client.run_json("hello")
 
     assert excinfo.value.rate_limit.retry_after_seconds == 3660
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+
+
+def test_claude_overloaded_api_error_remains_a_rate_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    diagnostic = (
+        "API Error: 529 Overloaded. This is a server-side issue, usually temporary"
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=json.dumps({"is_error": True, "result": diagnostic}),
+            stderr="",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(ClaudeRateLimitError) as excinfo:
+        ClaudeCodeClient().run_json("hello")
+
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+
+
+def test_claude_stderr_rate_limit_precedes_network_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = json.dumps({"is_error": True, "result": "Network is unreachable"})
+    stderr = "429 rate limit exceeded, retry after 5"
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(ClaudeRateLimitError) as excinfo:
+        ClaudeCodeClient().run_json("hello")
+
+    assert excinfo.value.retry_after_seconds == 65
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
 
 
 def test_run_json_raises_limit_error_for_hit_your_limit(monkeypatch: pytest.MonkeyPatch) -> None:

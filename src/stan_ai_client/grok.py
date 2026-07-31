@@ -14,11 +14,16 @@ from urllib.parse import unquote
 from jsonschema.exceptions import ValidationError
 
 from ._options import first_set, first_set_or
+from ._network import (
+    grok_trusted_error_texts,
+    has_network_unavailable_evidence,
+)
 from ._retry import run_with_rate_limit_retry
 from .exceptions import (
     GrokCancelledError,
     GrokExecutableNotFoundError,
     GrokMalformedStructuredOutputError,
+    GrokNetworkUnavailableError,
     GrokProcessError,
     GrokProtocolError,
     GrokRateLimitError,
@@ -812,18 +817,31 @@ class GrokClient:
         payload: GrokJsonPayload | None,
     ) -> GrokProcessError:
         error_text = summarize_grok_error_text(payload=payload, stdout=stdout, stderr=stderr)
-        if is_grok_rate_limit_text(error_text):
-            rate_limit = parse_rate_limit_info(error_text)
+        trusted_texts = grok_trusted_error_texts(
+            payload=payload,
+            stdout=stdout,
+            stderr=stderr,
+        )
+        rate_limit_text = next(
+            (
+                text
+                for text in (error_text, *trusted_texts)
+                if is_grok_rate_limit_text(text)
+            ),
+            None,
+        )
+        if rate_limit_text is not None:
+            rate_limit = parse_rate_limit_info(rate_limit_text)
             self.logger.warning(
                 "Grok run failed returncode=%d elapsed_ms=%.0f error=%s retry_after_seconds=%s reset_at=%s",
                 returncode,
                 command.elapsed_ms,
-                error_text,
+                rate_limit_text,
                 rate_limit.retry_after_seconds,
                 rate_limit.reset_at,
             )
             return GrokRateLimitError(
-                error_text,
+                rate_limit_text,
                 command=command,
                 returncode=returncode,
                 stdout=stdout,
@@ -832,13 +850,24 @@ class GrokClient:
                 rate_limit=rate_limit,
             )
 
-        self.logger.warning(
-            "Grok run failed returncode=%d elapsed_ms=%.0f error=%s",
-            returncode,
-            command.elapsed_ms,
-            error_text,
-        )
-        return GrokProcessError(
+        error_cls: type[GrokProcessError]
+        if has_network_unavailable_evidence(trusted_texts):
+            error_cls = GrokNetworkUnavailableError
+            self.logger.warning(
+                "Grok run failed returncode=%d elapsed_ms=%.0f network_unavailable=true error=%s",
+                returncode,
+                command.elapsed_ms,
+                error_text,
+            )
+        else:
+            error_cls = GrokProcessError
+            self.logger.warning(
+                "Grok run failed returncode=%d elapsed_ms=%.0f error=%s",
+                returncode,
+                command.elapsed_ms,
+                error_text,
+            )
+        return error_cls(
             error_text,
             command=command,
             returncode=returncode,

@@ -120,6 +120,8 @@ By default, Codex runs with `--dangerously-bypass-approvals-and-sandbox`. Set
 - `src/stan_ai_client/schema.py`: `StructuredSchema` and JSON Schema validation
 - `src/stan_ai_client/exceptions.py`: provider-neutral and provider-specific
   exception hierarchy
+- `src/stan_ai_client/_network.py`: provider-aware transport-connectivity
+  detection over provider-declared error records and guarded process diagnostics
 - `src/stan_ai_client/rate_limits.py`: rate-limit parsing helpers
 
 ## Logging
@@ -128,7 +130,7 @@ The clients use stdlib `logging`.
 
 - `INFO`: run start and finish metadata
 - `DEBUG`: redacted argv, payload metadata, and structured-output validation events
-- `WARNING` / `ERROR`: protocol failures, process failures, rate limits,
+- `WARNING` / `ERROR`: protocol failures, process failures, network failures, rate limits,
   rate-limit retry waits, wait-budget refusals, missing executable, and timeouts
 
 Prompt text is only logged when `log_prompts=True`.

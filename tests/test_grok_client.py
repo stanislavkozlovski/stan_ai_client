@@ -10,8 +10,11 @@ import pytest
 from stan_ai_client import (
     GrokCancelledError,
     GrokClient,
+    GrokCodeError,
     GrokMalformedStructuredOutputError,
+    GrokNetworkUnavailableError,
     GrokRunOptions,
+    NetworkUnavailableError,
 )
 from stan_ai_client.exceptions import (
     GrokExecutableNotFoundError,
@@ -203,6 +206,121 @@ def test_run_json_error_envelope_raises_process_error(mock_exec: Mock) -> None:
     assert exc.value.returncode == 0
     assert exc.value.payload is not None
     assert exc.value.payload.extras["type"] == "error"
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_grok_dns_error_uses_common_and_provider_network_types(
+    mock_exec: Mock,
+    july_31_dns_diagnostic: str,
+) -> None:
+    stdout = json.dumps(
+        {
+            "type": "error",
+            "message": f"{july_31_dns_diagnostic}\nstream disconnected",
+        }
+    )
+    stderr = "provider stream disconnected"
+    mock_exec.return_value.stdout = stdout
+    mock_exec.return_value.stderr = stderr
+    mock_exec.return_value.returncode = 1
+
+    with pytest.raises(NetworkUnavailableError) as excinfo:
+        GrokClient().run_json("hello")
+
+    error = excinfo.value
+    assert isinstance(error, GrokNetworkUnavailableError)
+    assert isinstance(error, GrokProcessError)
+    assert isinstance(error, GrokCodeError)
+    assert error.command.argv[0] == "grok"
+    assert error.returncode == 1
+    assert error.stdout == stdout
+    assert error.stderr == stderr
+    assert error.payload is not None
+    assert error.payload.extras["message"] == (
+        f"{july_31_dns_diagnostic}\nstream disconnected"
+    )
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_grok_plain_stdout_error_is_network_unavailable(
+    mock_exec: Mock,
+    july_31_dns_diagnostic: str,
+) -> None:
+    stdout = f"Error: {july_31_dns_diagnostic}"
+    mock_exec.return_value.stdout = stdout
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 1
+
+    with pytest.raises(GrokNetworkUnavailableError) as excinfo:
+        GrokClient().run_text("hello")
+
+    assert excinfo.value.stdout == stdout
+    assert excinfo.value.payload is None
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_grok_nested_error_cause_is_network_unavailable(
+    mock_exec: Mock,
+    july_31_dns_diagnostic: str,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "type": "error",
+            "error": {"cause": {"message": july_31_dns_diagnostic}},
+        }
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 1
+
+    with pytest.raises(GrokNetworkUnavailableError):
+        GrokClient().run_text("hello")
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_grok_stderr_rate_limit_precedes_network_payload(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {"type": "error", "message": "Network is unreachable"}
+    )
+    mock_exec.return_value.stderr = "429 rate limit exceeded, retry after 5"
+    mock_exec.return_value.returncode = 1
+
+    with pytest.raises(GrokRateLimitError) as excinfo:
+        GrokClient().run_text("hello")
+
+    assert excinfo.value.retry_after_seconds == 65
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_grok_ignores_network_prose_in_stdout_and_disconnect_alone(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "text": "diff --git a/doc.md b/doc.md\n+network is unreachable",
+            "stopReason": "EndTurn",
+        }
+    )
+    mock_exec.return_value.stderr = "stream disconnected"
+    mock_exec.return_value.returncode = 1
+
+    with pytest.raises(GrokProcessError) as excinfo:
+        GrokClient().run_text("quote the diff")
+
+    assert type(excinfo.value) is GrokProcessError
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_grok_successful_network_prose_is_ordinary_output(mock_exec: Mock) -> None:
+    stdout = "The documentation says network is unreachable.\n"
+    mock_exec.return_value.stdout = stdout
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    result = GrokClient().run_text("quote the documentation")
+
+    assert result.text == stdout.strip()
 
 
 @patch("stan_ai_client.grok.execute_command")
@@ -1302,8 +1420,10 @@ def test_resource_exhausted_raises_rate_limit_error(
     mock_exec.return_value.returncode = 1
 
     client = GrokClient()
-    with pytest.raises(GrokRateLimitError):
+    with pytest.raises(GrokRateLimitError) as excinfo:
         client.run_text("fail")
+
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
 
 
 @patch("stan_ai_client.grok.execute_command")

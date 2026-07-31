@@ -320,6 +320,32 @@ except ClaudeRateLimitError as exc:
     print(exc.reset_at or exc.retry_after_seconds)
 ```
 
+Catch `NetworkUnavailableError` to handle strong provider transport-connectivity
+failures the same way for Claude, Codex, and Grok. Provider-specific catches
+remain available through `ClaudeNetworkUnavailableError`,
+`CodexNetworkUnavailableError`, and `GrokNetworkUnavailableError`.
+
+```python
+from stan_ai_client import NetworkUnavailableError
+
+try:
+    result = client.run_json("Summarize this repository.")
+except NetworkUnavailableError as exc:
+    print(exc.stderr)
+```
+
+The exception preserves the command metadata, return code, stdout, stderr, and
+parsed payload. The client classifies strong DNS and routing diagnostics from
+provider-declared error records and guarded process diagnostics. Claude and Grok
+inspect process stderr plus guarded stdout error lines (`API Error:` for Claude
+and `Error:` for Grok). Codex inspects JSONL errors and JSON-mode stderr; because
+text- and structured-mode stderr also carries progress, only `ERROR:`-prefixed
+lines are inspected in those modes. Claude's declared `Unable to connect to API`
+and `Connection closed mid-response` errors are also recognized. Ordinary model
+output, prompts, and diffs are not inspected. Rate limits retain precedence
+across those diagnostic channels; retry and scheduling policy belongs to the
+caller.
+
 ## Public Surface
 
 Top-level exports:
@@ -365,6 +391,10 @@ from stan_ai_client import (
     ClaudeProcessError,
     CodexProcessError,
     GrokProcessError,
+    NetworkUnavailableError,
+    ClaudeNetworkUnavailableError,
+    CodexNetworkUnavailableError,
+    GrokNetworkUnavailableError,
     ClaudeProtocolError,
     CodexProtocolError,
     GrokProtocolError,

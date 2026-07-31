@@ -39,6 +39,10 @@ class ProcessError(AIClientError):
         super().__init__(message)
 
 
+class NetworkUnavailableError(ProcessError):
+    """Strong evidence that a provider transport was unavailable."""
+
+
 class ProtocolError(AIClientError):
     def __init__(self, message: str, *, command: CommandMetadata, stdout: str, stderr: str) -> None:
         self.command = command
@@ -142,6 +146,10 @@ class ClaudeProcessError(ProcessError, ClaudeCodeError):
     payload: ClaudeJsonPayload | None
 
 
+class ClaudeNetworkUnavailableError(NetworkUnavailableError, ClaudeProcessError):
+    payload: ClaudeJsonPayload | None
+
+
 class ClaudeProtocolError(ProtocolError, ClaudeCodeError):
     pass
 
@@ -224,6 +232,10 @@ class CodexProcessError(ProcessError, CodexCodeError):
     payload: CodexJsonPayload | None
 
 
+class CodexNetworkUnavailableError(NetworkUnavailableError, CodexProcessError):
+    payload: CodexJsonPayload | None
+
+
 class CodexProtocolError(ProtocolError, CodexCodeError):
     pass
 
@@ -282,6 +294,10 @@ class GrokTimeoutError(AIClientTimeoutError, GrokCodeError):
 
 
 class GrokProcessError(ProcessError, GrokCodeError):
+    payload: GrokJsonPayload | None
+
+
+class GrokNetworkUnavailableError(NetworkUnavailableError, GrokProcessError):
     payload: GrokJsonPayload | None
 
 

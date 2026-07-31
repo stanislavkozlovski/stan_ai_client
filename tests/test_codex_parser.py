@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from stan_ai_client.codex_parser import (
     parse_codex_jsonl_payload,
+    recover_codex_jsonl_prefix_payload,
     try_parse_codex_jsonl_payload,
 )
 
@@ -65,3 +66,38 @@ def test_parse_codex_jsonl_payload_rejects_non_event_object() -> None:
 
 def test_try_parse_codex_jsonl_payload_returns_none_for_invalid_jsonl() -> None:
     assert try_parse_codex_jsonl_payload("not json") is None
+
+
+def test_recover_codex_jsonl_prefix_payload_stops_before_malformed_tail() -> None:
+    error_event = {"type": "error", "message": "Network is unreachable"}
+    text = "\n".join(
+        [
+            '{"type":"error","message":"Network is unreachable"}',
+            '{"type":"turn.failed"',
+        ]
+    )
+
+    assert try_parse_codex_jsonl_payload(text) is None
+
+    payload = recover_codex_jsonl_prefix_payload(text)
+
+    assert payload is not None
+    assert payload.events == (error_event,)
+    assert payload.error == error_event
+
+
+def test_recover_codex_jsonl_prefix_payload_matches_strict_parse_when_well_formed() -> None:
+    """Both entry points scan lines through the same rule, so a well-formed
+    stream must recover to exactly what strict parsing produces."""
+    text = "\n".join(
+        [
+            "",
+            '  {"type":"thread.started","thread_id":"thread-1"}  ',
+            "",
+            '{"type":"error","message":"Network is unreachable"}',
+            '{"type":"turn.completed","usage":{"input_tokens":10}}',
+            "",
+        ]
+    )
+
+    assert recover_codex_jsonl_prefix_payload(text) == parse_codex_jsonl_payload(text)
