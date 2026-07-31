@@ -15,7 +15,7 @@ from jsonschema.exceptions import ValidationError
 from ._options import first_set, first_set_or
 from ._network import (
     codex_trusted_error_texts,
-    has_codex_network_unavailable_evidence,
+    has_network_unavailable_evidence,
 )
 from ._retry import run_with_rate_limit_retry
 from .codex_parser import (
@@ -515,15 +515,9 @@ class CodexClient:
         payload: CodexJsonPayload | None,
     ) -> CodexProcessError:
         error_text = summarize_codex_error_text(payload=payload, stdout=stdout, stderr=stderr)
+        trusted_texts = codex_trusted_error_texts(payload=payload, stderr=stderr)
         rate_limit_text = next(
-            (
-                text
-                for text in (
-                    error_text,
-                    *codex_trusted_error_texts(payload=payload, stderr=stderr),
-                )
-                if is_rate_limit_text(text)
-            ),
+            (text for text in (error_text, *trusted_texts) if is_rate_limit_text(text)),
             None,
         )
         if rate_limit_text is not None:
@@ -546,7 +540,7 @@ class CodexClient:
                 rate_limit=rate_limit,
             )
 
-        if has_codex_network_unavailable_evidence(payload=payload, stderr=stderr):
+        if has_network_unavailable_evidence(trusted_texts):
             self.logger.warning(
                 "Codex run failed returncode=%d elapsed_ms=%.0f network_unavailable=true error=%s",
                 returncode,

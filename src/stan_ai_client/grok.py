@@ -16,7 +16,7 @@ from jsonschema.exceptions import ValidationError
 from ._options import first_set, first_set_or
 from ._network import (
     grok_trusted_error_texts,
-    has_grok_network_unavailable_evidence,
+    has_network_unavailable_evidence,
 )
 from ._retry import run_with_rate_limit_retry
 from .exceptions import (
@@ -817,17 +817,15 @@ class GrokClient:
         payload: GrokJsonPayload | None,
     ) -> GrokProcessError:
         error_text = summarize_grok_error_text(payload=payload, stdout=stdout, stderr=stderr)
+        trusted_texts = grok_trusted_error_texts(
+            payload=payload,
+            stdout=stdout,
+            stderr=stderr,
+        )
         rate_limit_text = next(
             (
                 text
-                for text in (
-                    error_text,
-                    *grok_trusted_error_texts(
-                        payload=payload,
-                        stdout=stdout,
-                        stderr=stderr,
-                    ),
-                )
+                for text in (error_text, *trusted_texts)
                 if is_grok_rate_limit_text(text)
             ),
             None,
@@ -852,11 +850,7 @@ class GrokClient:
                 rate_limit=rate_limit,
             )
 
-        if has_grok_network_unavailable_evidence(
-            payload=payload,
-            stdout=stdout,
-            stderr=stderr,
-        ):
+        if has_network_unavailable_evidence(trusted_texts):
             self.logger.warning(
                 "Grok run failed returncode=%d elapsed_ms=%.0f network_unavailable=true error=%s",
                 returncode,

@@ -259,6 +259,24 @@ def test_grok_plain_stdout_error_is_network_unavailable(
 
 
 @patch("stan_ai_client.grok.execute_command")
+def test_grok_nested_error_cause_is_network_unavailable(
+    mock_exec: Mock,
+    july_31_dns_diagnostic: str,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "type": "error",
+            "error": {"cause": {"message": july_31_dns_diagnostic}},
+        }
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 1
+
+    with pytest.raises(GrokNetworkUnavailableError):
+        GrokClient().run_text("hello")
+
+
+@patch("stan_ai_client.grok.execute_command")
 def test_grok_stderr_rate_limit_precedes_network_payload(mock_exec: Mock) -> None:
     mock_exec.return_value.stdout = json.dumps(
         {"type": "error", "message": "Network is unreachable"}

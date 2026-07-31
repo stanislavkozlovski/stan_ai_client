@@ -429,19 +429,13 @@ class ClaudeCodeClient:
         payload: ClaudeJsonPayload | None,
     ) -> ClaudeProcessError:
         error_text = summarize_error_text(payload=payload, stdout=stdout, stderr=stderr)
+        trusted_texts = claude_trusted_error_texts(
+            payload=payload,
+            stdout=stdout,
+            stderr=stderr,
+        )
         rate_limit_text = next(
-            (
-                text
-                for text in (
-                    error_text,
-                    *claude_trusted_error_texts(
-                        payload=payload,
-                        stdout=stdout,
-                        stderr=stderr,
-                    ),
-                )
-                if is_rate_limit_text(text)
-            ),
+            (text for text in (error_text, *trusted_texts) if is_rate_limit_text(text)),
             None,
         )
         if rate_limit_text is not None:
@@ -464,11 +458,7 @@ class ClaudeCodeClient:
                 rate_limit=rate_limit,
             )
 
-        if has_claude_network_unavailable_evidence(
-            payload=payload,
-            stdout=stdout,
-            stderr=stderr,
-        ):
+        if has_claude_network_unavailable_evidence(trusted_texts):
             self.logger.warning(
                 "Claude run failed returncode=%d elapsed_ms=%.0f network_unavailable=true error=%s",
                 returncode,
