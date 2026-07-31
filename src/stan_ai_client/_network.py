@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 
+from .codex_parser import CODEX_ERROR_EVENT_TYPES
 from .types import ClaudeJsonPayload, CodexJsonPayload, GrokJsonPayload
 
 _NETWORK_UNAVAILABLE_MARKERS = (
@@ -29,23 +30,22 @@ _NETWORK_UNAVAILABLE_MARKERS = (
     "host is unreachable",
     "no route to host",
 )
-_CLAUDE_NETWORK_UNAVAILABLE_MARKERS = (
+# Claude declares connection failures that the shared markers miss.
+_CLAUDE_NETWORK_UNAVAILABLE_MARKERS = _NETWORK_UNAVAILABLE_MARKERS + (
     "unable to connect to api",
     "connection closed mid-response",
 )
 _TRUSTED_ERROR_KEYS = ("message", "error", "cause")
-_CODEX_ERROR_EVENT_TYPES = frozenset({"error", "turn.failed"})
 
 
 def has_network_unavailable_evidence(texts: Sequence[str]) -> bool:
     """Callers pass the provider's trusted error texts. A legacy error summary
     is not trusted here because it can quote ordinary model output."""
-    return any(_is_network_unavailable_text(text) for text in texts)
+    return _matches_any_marker(texts, _NETWORK_UNAVAILABLE_MARKERS)
 
 
 def has_claude_network_unavailable_evidence(texts: Sequence[str]) -> bool:
-    """Claude declares connection failures that the shared markers miss."""
-    return any(_is_claude_network_unavailable_text(text) for text in texts)
+    return _matches_any_marker(texts, _CLAUDE_NETWORK_UNAVAILABLE_MARKERS)
 
 
 def claude_trusted_error_texts(
@@ -82,7 +82,7 @@ def codex_trusted_error_texts(
     if payload.error is not None:
         texts.extend(_iter_trusted_error_record_texts(payload.error))
     for event in payload.events:
-        if event.get("type") in _CODEX_ERROR_EVENT_TYPES:
+        if event.get("type") in CODEX_ERROR_EVENT_TYPES:
             texts.extend(_iter_trusted_error_record_texts(event))
     return tuple(texts)
 
@@ -103,16 +103,12 @@ def grok_trusted_error_texts(
     return tuple(texts)
 
 
-def _is_network_unavailable_text(text: str) -> bool:
-    normalized = text.casefold()
-    return any(marker in normalized for marker in _NETWORK_UNAVAILABLE_MARKERS)
-
-
-def _is_claude_network_unavailable_text(text: str) -> bool:
-    normalized = text.casefold()
-    return _is_network_unavailable_text(text) or any(
-        marker in normalized for marker in _CLAUDE_NETWORK_UNAVAILABLE_MARKERS
-    )
+def _matches_any_marker(texts: Sequence[str], markers: tuple[str, ...]) -> bool:
+    for text in texts:
+        normalized = text.casefold()
+        if any(marker in normalized for marker in markers):
+            return True
+    return False
 
 
 def _prefixed_error_lines(text: str, *, prefix: str) -> tuple[str, ...]:

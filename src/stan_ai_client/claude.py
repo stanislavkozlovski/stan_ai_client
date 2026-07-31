@@ -458,29 +458,24 @@ class ClaudeCodeClient:
                 rate_limit=rate_limit,
             )
 
+        error_cls: type[ClaudeProcessError]
         if has_claude_network_unavailable_evidence(trusted_texts):
+            error_cls = ClaudeNetworkUnavailableError
             self.logger.warning(
                 "Claude run failed returncode=%d elapsed_ms=%.0f network_unavailable=true error=%s",
                 returncode,
                 command.elapsed_ms,
                 error_text,
             )
-            return ClaudeNetworkUnavailableError(
+        else:
+            error_cls = ClaudeProcessError
+            self.logger.warning(
+                "Claude run failed returncode=%d elapsed_ms=%.0f error=%s",
+                returncode,
+                command.elapsed_ms,
                 error_text,
-                command=command,
-                returncode=returncode,
-                stdout=stdout,
-                stderr=stderr,
-                payload=payload,
             )
-
-        self.logger.warning(
-            "Claude run failed returncode=%d elapsed_ms=%.0f error=%s",
-            returncode,
-            command.elapsed_ms,
-            error_text,
-        )
-        return ClaudeProcessError(
+        return error_cls(
             error_text,
             command=command,
             returncode=returncode,

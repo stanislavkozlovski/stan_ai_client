@@ -850,29 +850,24 @@ class GrokClient:
                 rate_limit=rate_limit,
             )
 
+        error_cls: type[GrokProcessError]
         if has_network_unavailable_evidence(trusted_texts):
+            error_cls = GrokNetworkUnavailableError
             self.logger.warning(
                 "Grok run failed returncode=%d elapsed_ms=%.0f network_unavailable=true error=%s",
                 returncode,
                 command.elapsed_ms,
                 error_text,
             )
-            return GrokNetworkUnavailableError(
+        else:
+            error_cls = GrokProcessError
+            self.logger.warning(
+                "Grok run failed returncode=%d elapsed_ms=%.0f error=%s",
+                returncode,
+                command.elapsed_ms,
                 error_text,
-                command=command,
-                returncode=returncode,
-                stdout=stdout,
-                stderr=stderr,
-                payload=payload,
             )
-
-        self.logger.warning(
-            "Grok run failed returncode=%d elapsed_ms=%.0f error=%s",
-            returncode,
-            command.elapsed_ms,
-            error_text,
-        )
-        return GrokProcessError(
+        return error_cls(
             error_text,
             command=command,
             returncode=returncode,

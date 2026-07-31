@@ -28,6 +28,7 @@ from stan_ai_client import (
     RateLimitRetryPolicy,
     StructuredSchema,
 )
+from stan_ai_client.codex_parser import CODEX_ERROR_EVENT_TYPES
 
 
 class RunRecorder:
@@ -464,6 +465,31 @@ def test_codex_dns_error_uses_common_and_provider_network_types(
         "type": "turn.failed",
         "error": {"message": "stream disconnected"},
     }
+
+
+@pytest.mark.parametrize("event_type", sorted(CODEX_ERROR_EVENT_TYPES))
+def test_codex_error_event_types_drive_payload_error_and_classification(
+    monkeypatch: pytest.MonkeyPatch,
+    july_31_dns_diagnostic: str,
+    event_type: str,
+) -> None:
+    """The parser's error selection and network classification read one shared
+    event-type set; narrowing either side leaves a parametrized case failing.
+    The diagnostic sits in the earlier event so only the event scan can find it.
+    """
+    diagnostic_event = {"type": event_type, "message": july_31_dns_diagnostic}
+    trailing_event = {"type": event_type, "message": "stream disconnected"}
+    stdout = "\n".join([json.dumps(diagnostic_event), json.dumps(trailing_event)])
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=1, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexNetworkUnavailableError) as excinfo:
+        CodexClient().run_json("hello")
+
+    assert excinfo.value.payload is not None
+    assert excinfo.value.payload.error == trailing_event
 
 
 def test_codex_dns_error_survives_a_truncated_jsonl_tail(

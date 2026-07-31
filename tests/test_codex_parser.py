@@ -84,3 +84,20 @@ def test_recover_codex_jsonl_prefix_payload_stops_before_malformed_tail() -> Non
     assert payload is not None
     assert payload.events == (error_event,)
     assert payload.error == error_event
+
+
+def test_recover_codex_jsonl_prefix_payload_matches_strict_parse_when_well_formed() -> None:
+    """Both entry points scan lines through the same rule, so a well-formed
+    stream must recover to exactly what strict parsing produces."""
+    text = "\n".join(
+        [
+            "",
+            '  {"type":"thread.started","thread_id":"thread-1"}  ',
+            "",
+            '{"type":"error","message":"Network is unreachable"}',
+            '{"type":"turn.completed","usage":{"input_tokens":10}}',
+            "",
+        ]
+    )
+
+    assert recover_codex_jsonl_prefix_payload(text) == parse_codex_jsonl_payload(text)

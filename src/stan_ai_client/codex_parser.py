@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from typing import Any
 
 from .types import CodexJsonPayload
+
+CODEX_ERROR_EVENT_TYPES = frozenset({"error", "turn.failed"})
+"""Event types Codex uses to declare a failure. Both the parsed payload's
+``error`` field and network classification select events through this set."""
+
+_CODEX_JSONL_PARSE_ERRORS = (TypeError, ValueError, json.JSONDecodeError)
 
 
 def parse_codex_jsonl_payload(text: str) -> CodexJsonPayload:
@@ -11,40 +18,36 @@ def parse_codex_jsonl_payload(text: str) -> CodexJsonPayload:
     if not raw:
         raise ValueError("empty Codex JSONL output")
 
-    events: list[dict[str, Any]] = []
-    for line in raw.splitlines():
-        if not line.strip():
-            continue
-        events.append(_parse_codex_jsonl_event(line))
-
-    return _make_codex_jsonl_payload(events)
+    return _make_codex_jsonl_payload(list(_iter_codex_jsonl_events(raw)))
 
 
 def try_parse_codex_jsonl_payload(text: str) -> CodexJsonPayload | None:
     try:
         return parse_codex_jsonl_payload(text)
-    except (TypeError, ValueError, json.JSONDecodeError):
+    except _CODEX_JSONL_PARSE_ERRORS:
         return None
 
 
 def recover_codex_jsonl_prefix_payload(text: str) -> CodexJsonPayload | None:
     """Recover fully decoded leading events before a malformed JSONL tail."""
-    raw = text.strip()
-    if not raw:
-        return None
-
     events: list[dict[str, Any]] = []
-    for line in raw.splitlines():
-        if not line.strip():
-            continue
-        try:
-            events.append(_parse_codex_jsonl_event(line))
-        except (TypeError, ValueError, json.JSONDecodeError):
-            break
+    try:
+        for event in _iter_codex_jsonl_events(text):
+            events.append(event)
+    except _CODEX_JSONL_PARSE_ERRORS:
+        pass
 
     if not events:
         return None
     return _make_codex_jsonl_payload(events)
+
+
+def _iter_codex_jsonl_events(text: str) -> Iterator[dict[str, Any]]:
+    """The single line-scanning rule. Strict parsing and prefix recovery differ
+    only in whether they stop at the first rejected line."""
+    for line in text.splitlines():
+        if line.strip():
+            yield _parse_codex_jsonl_event(line)
 
 
 def _parse_codex_jsonl_event(line: str) -> dict[str, Any]:
@@ -80,7 +83,7 @@ def _make_codex_jsonl_payload(events: list[dict[str, Any]]) -> CodexJsonPayload:
                 text_value = item.get("text")
                 if isinstance(text_value, str):
                     result = text_value
-        elif event_type in {"turn.failed", "error"}:
+        elif event_type in CODEX_ERROR_EVENT_TYPES:
             error = parsed
 
     return CodexJsonPayload(
