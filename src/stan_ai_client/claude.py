@@ -11,7 +11,10 @@ from typing import Any, Callable, Mapping, TypeVar
 from jsonschema.exceptions import ValidationError
 
 from ._options import first_set, first_set_or
-from ._network import has_claude_network_unavailable_evidence
+from ._network import (
+    claude_trusted_error_texts,
+    has_claude_network_unavailable_evidence,
+)
 from ._retry import run_with_rate_limit_retry
 from .exceptions import (
     ClaudeExecutableNotFoundError,
@@ -426,18 +429,33 @@ class ClaudeCodeClient:
         payload: ClaudeJsonPayload | None,
     ) -> ClaudeProcessError:
         error_text = summarize_error_text(payload=payload, stdout=stdout, stderr=stderr)
-        if is_rate_limit_text(error_text):
-            rate_limit = parse_rate_limit_info(error_text)
+        rate_limit_text = next(
+            (
+                text
+                for text in (
+                    error_text,
+                    *claude_trusted_error_texts(
+                        payload=payload,
+                        stdout=stdout,
+                        stderr=stderr,
+                    ),
+                )
+                if is_rate_limit_text(text)
+            ),
+            None,
+        )
+        if rate_limit_text is not None:
+            rate_limit = parse_rate_limit_info(rate_limit_text)
             self.logger.warning(
                 "Claude run failed returncode=%d elapsed_ms=%.0f error=%s retry_after_seconds=%s reset_at=%s",
                 returncode,
                 command.elapsed_ms,
-                error_text,
+                rate_limit_text,
                 rate_limit.retry_after_seconds,
                 rate_limit.reset_at,
             )
             return ClaudeRateLimitError(
-                error_text,
+                rate_limit_text,
                 command=command,
                 returncode=returncode,
                 stdout=stdout,

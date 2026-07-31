@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 
 from .types import ClaudeJsonPayload, CodexJsonPayload, GrokJsonPayload
 
@@ -49,24 +49,53 @@ def _is_claude_network_unavailable_text(text: str) -> bool:
     )
 
 
+def claude_trusted_error_texts(
+    *,
+    payload: ClaudeJsonPayload | None,
+    stdout: str,
+    stderr: str,
+) -> tuple[str, ...]:
+    texts: list[str] = []
+    if stderr.strip():
+        texts.append(stderr)
+    if payload is not None and payload.is_error is True and payload.result is not None:
+        texts.append(payload.result)
+    texts.extend(_prefixed_error_lines(stdout, prefix="api error:"))
+    return tuple(texts)
+
+
 def has_claude_network_unavailable_evidence(
     *,
     payload: ClaudeJsonPayload | None,
     stdout: str,
     stderr: str,
 ) -> bool:
-    if _is_claude_network_unavailable_text(stderr):
-        return True
-    if (
-        payload is not None
-        and payload.is_error is True
-        and payload.result is not None
-        and _is_claude_network_unavailable_text(payload.result)
-    ):
-        return True
-    return stdout.lstrip().casefold().startswith(
-        "api error:"
-    ) and _is_claude_network_unavailable_text(stdout)
+    return any(
+        _is_claude_network_unavailable_text(text)
+        for text in claude_trusted_error_texts(
+            payload=payload,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    )
+
+
+def codex_trusted_error_texts(
+    *,
+    payload: CodexJsonPayload | None,
+    stderr: str,
+) -> tuple[str, ...]:
+    texts: list[str] = []
+    if stderr.strip():
+        texts.append(stderr)
+    if payload is None:
+        return tuple(texts)
+    if payload.error is not None:
+        texts.extend(_iter_trusted_error_record_texts(payload.error))
+    for event in payload.events:
+        if event.get("type") in _CODEX_ERROR_EVENT_TYPES:
+            texts.extend(_iter_trusted_error_record_texts(event))
+    return tuple(texts)
 
 
 def has_codex_network_unavailable_evidence(
@@ -74,59 +103,70 @@ def has_codex_network_unavailable_evidence(
     payload: CodexJsonPayload | None,
     stderr: str,
 ) -> bool:
-    if is_network_unavailable_text(stderr):
-        return True
-    if payload is None:
-        return False
-    if (
-        payload.error is not None
-        and _trusted_error_record_has_network_unavailable_evidence(payload.error)
-    ):
-        return True
     return any(
-        event.get("type") in _CODEX_ERROR_EVENT_TYPES
-        and _trusted_error_record_has_network_unavailable_evidence(event)
-        for event in payload.events
+        is_network_unavailable_text(text)
+        for text in codex_trusted_error_texts(payload=payload, stderr=stderr)
     )
 
 
-def has_grok_network_unavailable_evidence(
+def grok_trusted_error_texts(
     *,
     payload: GrokJsonPayload | None,
+    stdout: str,
     stderr: str,
-) -> bool:
-    if is_network_unavailable_text(stderr):
-        return True
-    if payload is None or payload.extras.get("type") != "error":
-        return False
-    return any(
-        _trusted_error_value_has_network_unavailable_evidence(value)
+) -> tuple[str, ...]:
+    texts: list[str] = []
+    if stderr.strip():
+        texts.append(stderr)
+    if payload is not None and payload.extras.get("type") == "error":
         for value in (
             payload.extras.get("message"),
             payload.extras.get("error"),
             payload.extras.get("cause"),
             payload.text,
-        )
-    )
+        ):
+            texts.extend(_iter_trusted_error_value_texts(value))
+    texts.extend(_prefixed_error_lines(stdout, prefix="error:"))
+    return tuple(texts)
 
 
-def _trusted_error_record_has_network_unavailable_evidence(
-    record: Mapping[str, object],
+def has_grok_network_unavailable_evidence(
+    *,
+    payload: GrokJsonPayload | None,
+    stdout: str,
+    stderr: str,
 ) -> bool:
     return any(
-        _trusted_error_value_has_network_unavailable_evidence(record.get(key))
-        for key in _TRUSTED_ERROR_KEYS
+        is_network_unavailable_text(text)
+        for text in grok_trusted_error_texts(
+            payload=payload,
+            stdout=stdout,
+            stderr=stderr,
+        )
     )
 
 
-def _trusted_error_value_has_network_unavailable_evidence(value: object) -> bool:
+def _prefixed_error_lines(text: str, *, prefix: str) -> tuple[str, ...]:
+    lines: list[str] = []
+    for line in text.splitlines():
+        candidate = line.lstrip()
+        if candidate.casefold().startswith(prefix):
+            lines.append(candidate)
+    return tuple(lines)
+
+
+def _iter_trusted_error_record_texts(
+    record: Mapping[str, object],
+) -> Iterator[str]:
+    for key in _TRUSTED_ERROR_KEYS:
+        yield from _iter_trusted_error_value_texts(record.get(key))
+
+
+def _iter_trusted_error_value_texts(value: object) -> Iterator[str]:
     if isinstance(value, str):
-        return is_network_unavailable_text(value)
-    if isinstance(value, Mapping):
-        return _trusted_error_record_has_network_unavailable_evidence(value)
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return any(
-            _trusted_error_value_has_network_unavailable_evidence(item)
-            for item in value
-        )
-    return False
+        yield value
+    elif isinstance(value, Mapping):
+        yield from _iter_trusted_error_record_texts(value)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for item in value:
+            yield from _iter_trusted_error_value_texts(item)

@@ -420,6 +420,59 @@ def test_codex_dns_error_uses_common_and_provider_network_types(
     }
 
 
+def test_codex_stderr_rate_limit_precedes_network_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = json.dumps({"type": "error", "message": "Network is unreachable"})
+    stderr = "429 rate limit exceeded, retry after 5"
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexRateLimitError) as excinfo:
+        CodexClient().run_json("hello")
+
+    assert excinfo.value.retry_after_seconds == 65
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+
+
+def test_codex_earlier_rate_limit_event_precedes_later_network_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "error",
+                    "message": "Rate limit exceeded, retry after 5",
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "turn.failed",
+                    "error": {"message": "Network is unreachable"},
+                }
+            ),
+        ]
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=1, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexRateLimitError) as excinfo:
+        CodexClient().run_json("hello")
+
+    assert excinfo.value.retry_after_seconds == 65
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+
+
 def test_codex_ignores_agent_message_network_prose_and_disconnect_alone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

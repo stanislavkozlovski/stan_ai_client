@@ -242,6 +242,38 @@ def test_grok_dns_error_uses_common_and_provider_network_types(
 
 
 @patch("stan_ai_client.grok.execute_command")
+def test_grok_plain_stdout_error_is_network_unavailable(
+    mock_exec: Mock,
+    july_31_dns_diagnostic: str,
+) -> None:
+    stdout = f"Error: {july_31_dns_diagnostic}"
+    mock_exec.return_value.stdout = stdout
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 1
+
+    with pytest.raises(GrokNetworkUnavailableError) as excinfo:
+        GrokClient().run_text("hello")
+
+    assert excinfo.value.stdout == stdout
+    assert excinfo.value.payload is None
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_grok_stderr_rate_limit_precedes_network_payload(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {"type": "error", "message": "Network is unreachable"}
+    )
+    mock_exec.return_value.stderr = "429 rate limit exceeded, retry after 5"
+    mock_exec.return_value.returncode = 1
+
+    with pytest.raises(GrokRateLimitError) as excinfo:
+        GrokClient().run_text("hello")
+
+    assert excinfo.value.retry_after_seconds == 65
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+
+
+@patch("stan_ai_client.grok.execute_command")
 def test_grok_ignores_network_prose_in_stdout_and_disconnect_alone(
     mock_exec: Mock,
 ) -> None:
