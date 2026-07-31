@@ -604,8 +604,8 @@ routine diagnostics.
 
 ## Network Availability
 
-`NetworkUnavailableError` is the provider-neutral contract for proven local
-DNS resolution or outbound-routing failures. The concrete exceptions also
+`NetworkUnavailableError` is the provider-neutral contract for strong evidence
+that a provider transport is unavailable. The concrete exceptions also
 retain their provider contracts:
 
 - `ClaudeNetworkUnavailableError` is a `ClaudeProcessError` and `ClaudeCodeError`
@@ -615,11 +615,12 @@ retain their provider contracts:
 All four types preserve `command`, `returncode`, `stdout`, `stderr`, and
 `payload`. Classification recognizes strong diagnostics such as DNS lookup or
 temporary name-resolution failure, network unreachable, and no route to host.
-It examines process stderr and provider-declared error payloads or events only;
-ordinary transcripts, prompts, documentation, diffs, and successful output are
-not searched. A stream disconnect without DNS or routing evidence remains the
-provider's ordinary process error. The library does not sleep, retry, or impose
-scheduling policy for this condition.
+Claude also recognizes its own `Unable to connect to API` and `Connection
+closed mid-response` failures. Classification examines process stderr and
+provider-declared error payloads or events only; ordinary transcripts, prompts,
+documentation, diffs, and successful output are not searched. A bare stream
+disconnect remains the provider's ordinary process error. The library does not
+sleep, retry, or impose scheduling policy for this condition.
 
 ## Rate Limits
 

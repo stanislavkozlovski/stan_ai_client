@@ -40,7 +40,7 @@ class ProcessError(AIClientError):
 
 
 class NetworkUnavailableError(ProcessError):
-    """A proven local DNS or outbound-routing failure."""
+    """Strong evidence that a provider transport was unavailable."""
 
 
 class ProtocolError(AIClientError):

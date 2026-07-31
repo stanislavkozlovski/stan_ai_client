@@ -29,6 +29,10 @@ _NETWORK_UNAVAILABLE_MARKERS = (
     "host is unreachable",
     "no route to host",
 )
+_CLAUDE_NETWORK_UNAVAILABLE_MARKERS = (
+    "unable to connect to api",
+    "connection closed mid-response",
+)
 _TRUSTED_ERROR_KEYS = ("message", "error", "cause")
 _CODEX_ERROR_EVENT_TYPES = frozenset({"error", "turn.failed"})
 
@@ -38,19 +42,31 @@ def is_network_unavailable_text(text: str) -> bool:
     return any(marker in normalized for marker in _NETWORK_UNAVAILABLE_MARKERS)
 
 
+def _is_claude_network_unavailable_text(text: str) -> bool:
+    normalized = text.casefold()
+    return is_network_unavailable_text(text) or any(
+        marker in normalized for marker in _CLAUDE_NETWORK_UNAVAILABLE_MARKERS
+    )
+
+
 def has_claude_network_unavailable_evidence(
     *,
     payload: ClaudeJsonPayload | None,
+    stdout: str,
     stderr: str,
 ) -> bool:
-    if is_network_unavailable_text(stderr):
+    if _is_claude_network_unavailable_text(stderr):
         return True
-    return bool(
+    if (
         payload is not None
         and payload.is_error is True
         and payload.result is not None
-        and is_network_unavailable_text(payload.result)
-    )
+        and _is_claude_network_unavailable_text(payload.result)
+    ):
+        return True
+    return stdout.lstrip().casefold().startswith(
+        "api error:"
+    ) and _is_claude_network_unavailable_text(stdout)
 
 
 def has_codex_network_unavailable_evidence(

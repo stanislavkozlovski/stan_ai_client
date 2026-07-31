@@ -228,6 +228,53 @@ def test_claude_dns_error_uses_common_and_provider_network_types(
 @pytest.mark.parametrize(
     "diagnostic",
     [
+        "API Error: Unable to connect to API (ENOTIMP)",
+        "API Error: Connection closed mid-response. The response above may be incomplete.",
+    ],
+)
+def test_claude_api_connection_errors_are_network_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    diagnostic: str,
+) -> None:
+    stdout = json.dumps({"is_error": True, "result": diagnostic})
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=stdout,
+            stderr="",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(ClaudeNetworkUnavailableError) as excinfo:
+        ClaudeCodeClient().run_json("hello")
+
+    assert excinfo.value.payload is not None
+    assert excinfo.value.payload.result == diagnostic
+
+
+def test_claude_text_mode_api_connection_error_is_network_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    diagnostic = "API Error: Unable to connect to API (ENOTIMP)"
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=diagnostic,
+            stderr="",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(ClaudeNetworkUnavailableError):
+        ClaudeCodeClient().run_text("hello")
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
         "Temporary failure in name resolution",
         "Network is unreachable",
         "No route to host",
@@ -307,6 +354,28 @@ def test_run_json_raises_rate_limit_error(monkeypatch: pytest.MonkeyPatch) -> No
         client.run_json("hello")
 
     assert excinfo.value.rate_limit.retry_after_seconds == 3660
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+
+
+def test_claude_overloaded_api_error_remains_a_rate_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    diagnostic = (
+        "API Error: 529 Overloaded. This is a server-side issue, usually temporary"
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=json.dumps({"is_error": True, "result": diagnostic}),
+            stderr="",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(ClaudeRateLimitError) as excinfo:
+        ClaudeCodeClient().run_json("hello")
+
     assert not isinstance(excinfo.value, NetworkUnavailableError)
 
 

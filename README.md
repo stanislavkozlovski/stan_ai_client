@@ -320,7 +320,7 @@ except ClaudeRateLimitError as exc:
     print(exc.reset_at or exc.retry_after_seconds)
 ```
 
-Catch `NetworkUnavailableError` to handle proven local DNS or outbound-routing
+Catch `NetworkUnavailableError` to handle strong provider transport-connectivity
 failures the same way for Claude, Codex, and Grok. Provider-specific catches
 remain available through `ClaudeNetworkUnavailableError`,
 `CodexNetworkUnavailableError`, and `GrokNetworkUnavailableError`.
@@ -335,10 +335,11 @@ except NetworkUnavailableError as exc:
 ```
 
 The exception preserves the command metadata, return code, stdout, stderr, and
-parsed payload. The client classifies only strong DNS and routing diagnostics
-from process stderr or provider-declared error records; ordinary model output,
-prompts, and diffs are not inspected. Retry and scheduling policy belongs to
-the caller.
+parsed payload. The client classifies strong DNS and routing diagnostics from
+process stderr or provider-declared error records. Claude's declared
+`Unable to connect to API` and `Connection closed mid-response` errors are also
+recognized. Ordinary model output, prompts, and diffs are not inspected. Retry
+and scheduling policy belongs to the caller.
 
 ## Public Surface
 

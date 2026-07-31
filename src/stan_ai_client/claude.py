@@ -470,7 +470,11 @@ class ClaudeCodeClient:
                 rate_limit=rate_limit,
             )
 
-        if has_claude_network_unavailable_evidence(payload=payload, stderr=stderr):
+        if has_claude_network_unavailable_evidence(
+            payload=payload,
+            stdout=stdout,
+            stderr=stderr,
+        ):
             self.logger.warning(
                 "Claude run failed returncode=%d elapsed_ms=%.0f network_unavailable=true error=%s",
                 returncode,
