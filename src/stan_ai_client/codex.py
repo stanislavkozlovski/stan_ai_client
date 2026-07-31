@@ -20,6 +20,7 @@ from ._network import (
 from ._retry import run_with_rate_limit_retry
 from .codex_parser import (
     make_codex_structured_payload,
+    recover_codex_jsonl_prefix_payload,
     summarize_codex_error_text,
     try_parse_codex_jsonl_payload,
 )
@@ -185,6 +186,8 @@ class CodexClient:
         payload = try_parse_codex_jsonl_payload(stdout)
 
         if completed.returncode != 0:
+            if payload is None:
+                payload = recover_codex_jsonl_prefix_payload(stdout)
             raise self._build_process_error(
                 metadata,
                 returncode=completed.returncode,

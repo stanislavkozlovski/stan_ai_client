@@ -12,23 +12,60 @@ def parse_codex_jsonl_payload(text: str) -> CodexJsonPayload:
         raise ValueError("empty Codex JSONL output")
 
     events: list[dict[str, Any]] = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        events.append(_parse_codex_jsonl_event(line))
+
+    return _make_codex_jsonl_payload(events)
+
+
+def try_parse_codex_jsonl_payload(text: str) -> CodexJsonPayload | None:
+    try:
+        return parse_codex_jsonl_payload(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def recover_codex_jsonl_prefix_payload(text: str) -> CodexJsonPayload | None:
+    """Recover fully decoded leading events before a malformed JSONL tail."""
+    raw = text.strip()
+    if not raw:
+        return None
+
+    events: list[dict[str, Any]] = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            events.append(_parse_codex_jsonl_event(line))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            break
+
+    if not events:
+        return None
+    return _make_codex_jsonl_payload(events)
+
+
+def _parse_codex_jsonl_event(line: str) -> dict[str, Any]:
+    parsed = json.loads(line)
+    if not isinstance(parsed, dict):
+        raise ValueError("expected each Codex JSONL line to be a JSON object")
+
+    event_type = parsed.get("type")
+    if not isinstance(event_type, str):
+        raise ValueError("expected each Codex JSONL event to have a string type")
+    return parsed
+
+
+def _make_codex_jsonl_payload(events: list[dict[str, Any]]) -> CodexJsonPayload:
     thread_id: str | None = None
     result: str | None = None
     usage: dict[str, Any] = {}
     error: dict[str, Any] | None = None
 
-    for line in raw.splitlines():
-        if not line.strip():
-            continue
-        parsed = json.loads(line)
-        if not isinstance(parsed, dict):
-            raise ValueError("expected each Codex JSONL line to be a JSON object")
-
-        event_type = parsed.get("type")
-        if not isinstance(event_type, str):
-            raise ValueError("expected each Codex JSONL event to have a string type")
-
-        events.append(parsed)
+    for parsed in events:
+        event_type = parsed["type"]
         if event_type == "thread.started":
             raw_thread_id = parsed.get("thread_id")
             if isinstance(raw_thread_id, str):
@@ -55,13 +92,6 @@ def parse_codex_jsonl_payload(text: str) -> CodexJsonPayload:
         structured_output=None,
         _structured_output_present=False,
     )
-
-
-def try_parse_codex_jsonl_payload(text: str) -> CodexJsonPayload | None:
-    try:
-        return parse_codex_jsonl_payload(text)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return None
 
 
 def make_codex_structured_payload(

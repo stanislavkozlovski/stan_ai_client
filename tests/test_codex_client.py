@@ -420,6 +420,26 @@ def test_codex_dns_error_uses_common_and_provider_network_types(
     }
 
 
+def test_codex_dns_error_survives_a_truncated_jsonl_tail(
+    monkeypatch: pytest.MonkeyPatch,
+    july_31_dns_diagnostic: str,
+) -> None:
+    error_event = {"type": "error", "message": july_31_dns_diagnostic}
+    stdout = "\n".join([json.dumps(error_event), '{"type":"turn.failed"'])
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=1, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexNetworkUnavailableError) as excinfo:
+        CodexClient().run_json("hello")
+
+    assert excinfo.value.stdout == stdout
+    assert excinfo.value.payload is not None
+    assert excinfo.value.payload.events == (error_event,)
+    assert excinfo.value.payload.error == error_event
+
+
 def test_codex_stderr_rate_limit_precedes_network_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
