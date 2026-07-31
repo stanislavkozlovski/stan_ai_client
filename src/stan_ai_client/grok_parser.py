@@ -93,10 +93,7 @@ def is_grok_structured_output_failure(payload: GrokJsonPayload) -> bool:
     """True when a Grok envelope reports/implies it produced no structuredOutput."""
     if payload.has_structured_output:
         return False
-    if (
-        "structuredOutputError" in payload.extras
-        or "structured_output_error" in payload.extras
-    ):
+    if "structuredOutputError" in payload.extras or "structured_output_error" in payload.extras:
         return True
     return payload.text is not None and is_grok_envelope_metadata(payload)
 
@@ -159,9 +156,7 @@ class GrokJsonText:
     json_value_count: int | None = None
 
 
-def _decode_json_sequence(
-    raw: str,
-) -> tuple[tuple[Any, ...], json.JSONDecodeError | None]:
+def _decode_json_sequence(raw: str) -> tuple[tuple[Any, ...], json.JSONDecodeError | None]:
     """Decode every whitespace-separated top-level JSON value in ``raw``."""
     decoder = json.JSONDecoder()
     values: list[Any] = []

@@ -44,9 +44,7 @@ class NetworkUnavailableError(ProcessError):
 
 
 class ProtocolError(AIClientError):
-    def __init__(
-        self, message: str, *, command: CommandMetadata, stdout: str, stderr: str
-    ) -> None:
+    def __init__(self, message: str, *, command: CommandMetadata, stdout: str, stderr: str) -> None:
         self.command = command
         self.stdout = stdout
         self.stderr = stderr
@@ -242,9 +240,7 @@ class CodexProtocolError(ProtocolError, CodexCodeError):
     pass
 
 
-class CodexStructuredOutputMissingError(
-    StructuredOutputMissingError, CodexProtocolError
-):
+class CodexStructuredOutputMissingError(StructuredOutputMissingError, CodexProtocolError):
     payload: CodexJsonPayload
 
 
@@ -376,7 +372,9 @@ class GrokMalformedStructuredOutputError(GrokProtocolError):
         super().__init__(message, command=command, stdout=stdout, stderr=stderr)
 
 
-class GrokStructuredOutputMissingError(StructuredOutputMissingError, GrokProtocolError):
+class GrokStructuredOutputMissingError(
+    StructuredOutputMissingError, GrokProtocolError
+):
     payload: GrokJsonPayload
 
 

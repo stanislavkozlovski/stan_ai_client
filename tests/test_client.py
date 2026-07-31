@@ -54,8 +54,7 @@ def test_client_module_reexports_legacy_symbols() -> None:
 class RunRecorder:
     def __init__(
         self,
-        completed: subprocess.CompletedProcess[str]
-        | list[subprocess.CompletedProcess[str]],
+        completed: subprocess.CompletedProcess[str] | list[subprocess.CompletedProcess[str]],
     ) -> None:
         self.completed = completed if isinstance(completed, list) else [completed]
         self.calls: list[dict[str, Any]] = []
@@ -86,9 +85,7 @@ class RunRecorder:
         return self.completed[min(call_index, len(self.completed) - 1)]
 
 
-def test_run_json_uses_stdin_and_parses_payload(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_run_json_uses_stdin_and_parses_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = RunRecorder(
         subprocess.CompletedProcess(
             args=[],
@@ -167,9 +164,7 @@ def test_run_json_raises_protocol_error_on_non_json_output(
         client.run_json("hello")
 
 
-def test_run_json_raises_process_error_with_payload(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_run_json_raises_process_error_with_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = RunRecorder(
         subprocess.CompletedProcess(
             args=[],
@@ -379,9 +374,7 @@ def test_claude_overloaded_api_error_remains_a_rate_limit(
     assert not isinstance(excinfo.value, NetworkUnavailableError)
 
 
-def test_run_json_raises_limit_error_for_hit_your_limit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_run_json_raises_limit_error_for_hit_your_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = RunRecorder(
         subprocess.CompletedProcess(
             args=[],
@@ -465,9 +458,7 @@ def test_rate_limit_policy_refuses_json_wait_over_budget(
     with pytest.raises(ClaudeRateLimitError) as excinfo:
         client.run_json(
             "hello",
-            rate_limit_policy=RateLimitRetryPolicy(
-                max_wait_seconds=5, label="json test"
-            ),
+            rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=5, label="json test"),
         )
 
     assert excinfo.value.retry_after_seconds == 70
@@ -614,9 +605,7 @@ def test_rate_limit_policy_retries_text_mode(monkeypatch: pytest.MonkeyPatch) ->
     assert sleeps == [62.0]
 
 
-def test_rate_limit_policy_retries_structured_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_rate_limit_policy_retries_structured_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = RunRecorder(
         [
             subprocess.CompletedProcess(

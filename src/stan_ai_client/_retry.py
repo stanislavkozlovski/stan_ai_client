@@ -66,9 +66,7 @@ def run_with_rate_limit_retry(
                 raise
 
             if rate_limit_policy.max_wait_seconds is not None:
-                remaining_wait_seconds = (
-                    rate_limit_policy.max_wait_seconds - total_wait_seconds
-                )
+                remaining_wait_seconds = rate_limit_policy.max_wait_seconds - total_wait_seconds
                 if wait_seconds_float > remaining_wait_seconds:
                     logger.warning(
                         "%s rate limit exceeds wait budget attempt=%d wait_seconds=%.1f remaining_wait_seconds=%.1f total_wait_seconds=%.1f max_wait_seconds=%.1f reset_at=%s label=%s",

@@ -32,9 +32,9 @@ def test_first_set_or_prefers_first_set_value_over_default() -> None:
     assert first_set_or(None, "from-default-options", default="client-default") == (
         "from-default-options"
     )
-    assert first_set_or(
-        "from-call", "from-default-options", default="client-default"
-    ) == ("from-call")
+    assert first_set_or("from-call", "from-default-options", default="client-default") == (
+        "from-call"
+    )
 
 
 def test_first_set_or_keeps_falsy_resolved_value() -> None:

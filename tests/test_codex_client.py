@@ -33,8 +33,7 @@ from stan_ai_client import (
 class RunRecorder:
     def __init__(
         self,
-        completed: subprocess.CompletedProcess[str]
-        | list[subprocess.CompletedProcess[str]],
+        completed: subprocess.CompletedProcess[str] | list[subprocess.CompletedProcess[str]],
     ) -> None:
         self.completed = completed if isinstance(completed, list) else [completed]
         self.calls: list[dict[str, Any]] = []
@@ -168,9 +167,7 @@ def test_codex_run_text_can_omit_bypass_and_use_argv_prompt(
     assert 'web_search="disabled"' in argv
 
 
-def test_codex_run_text_uses_default_input_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_codex_run_text_uses_default_input_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = RunRecorder(
         subprocess.CompletedProcess(args=[], returncode=0, stdout="done\n", stderr="")
     )
@@ -243,9 +240,7 @@ def test_codex_run_text_can_resume_session(monkeypatch: pytest.MonkeyPatch) -> N
     assert argv[-1] == "-"
 
 
-def test_codex_run_text_can_continue_last_session(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_codex_run_text_can_continue_last_session(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = RunRecorder(
         subprocess.CompletedProcess(args=[], returncode=0, stdout="done\n", stderr="")
     )
@@ -336,9 +331,7 @@ def test_codex_run_json_raises_protocol_error_on_non_jsonl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     recorder = RunRecorder(
-        subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="plain text", stderr=""
-        )
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="plain text", stderr="")
     )
     monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
 
@@ -351,9 +344,7 @@ def test_codex_run_json_raises_protocol_error_on_non_event_json(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     recorder = RunRecorder(
-        subprocess.CompletedProcess(
-            args=[], returncode=0, stdout='{"summary":"brief"}', stderr=""
-        )
+        subprocess.CompletedProcess(args=[], returncode=0, stdout='{"summary":"brief"}', stderr="")
     )
     monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
 
@@ -381,10 +372,7 @@ def test_codex_run_json_raises_process_error_from_turn_failed(
 
     assert "permission denied" in str(excinfo.value)
     assert excinfo.value.payload is not None
-    assert excinfo.value.payload.error == {
-        "type": "turn.failed",
-        "message": "permission denied",
-    }
+    assert excinfo.value.payload.error == {"type": "turn.failed", "message": "permission denied"}
 
 
 def test_codex_dns_error_uses_common_and_provider_network_types(
@@ -603,9 +591,7 @@ def test_codex_run_structured_rejects_non_object_schema(
 
     client = CodexClient()
     with pytest.raises(CodexSchemaValidationError, match="root object"):
-        client.run_structured(
-            "return null", schema=StructuredSchema.from_dict({"type": "null"})
-        )
+        client.run_structured("return null", schema=StructuredSchema.from_dict({"type": "null"}))
 
     assert recorder.calls == []
 
@@ -727,9 +713,7 @@ def test_codex_run_structured_rejects_unsupported_schema_subset(
     message: str,
 ) -> None:
     recorder = RunRecorder(
-        subprocess.CompletedProcess(
-            args=[], returncode=0, stdout='{"summary":"brief"}', stderr=""
-        )
+        subprocess.CompletedProcess(args=[], returncode=0, stdout='{"summary":"brief"}', stderr="")
     )
     monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
 
@@ -738,7 +722,6 @@ def test_codex_run_structured_rejects_unsupported_schema_subset(
         client.run_structured("hello", schema=StructuredSchema.from_dict(schema_dict))
 
     assert recorder.calls == []
-
 
 @pytest.mark.parametrize(
     "options, expected_resume_arg",
@@ -753,9 +736,7 @@ def test_codex_run_structured_allows_resume_options(
     expected_resume_arg: str,
 ) -> None:
     recorder = RunRecorder(
-        subprocess.CompletedProcess(
-            args=[], returncode=0, stdout='{"summary":"brief"}', stderr=""
-        )
+        subprocess.CompletedProcess(args=[], returncode=0, stdout='{"summary":"brief"}', stderr="")
     )
     monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
 
@@ -847,9 +828,7 @@ def test_codex_missing_executable_is_wrapped(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_codex_missing_cwd_is_process_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    def raise_missing_cwd(
-        *args: Any, **kwargs: Any
-    ) -> subprocess.CompletedProcess[str]:
+    def raise_missing_cwd(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         raise FileNotFoundError(2, "No such file or directory", kwargs["cwd"])
 
     monkeypatch.setattr("stan_ai_client.transport.subprocess.run", raise_missing_cwd)
@@ -872,9 +851,7 @@ def test_codex_logging_redacts_prompt_and_schema_path(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     recorder = RunRecorder(
-        subprocess.CompletedProcess(
-            args=[], returncode=0, stdout='{"summary":"brief"}', stderr=""
-        )
+        subprocess.CompletedProcess(args=[], returncode=0, stdout='{"summary":"brief"}', stderr="")
     )
     monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
 

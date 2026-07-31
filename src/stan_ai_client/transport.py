@@ -24,3 +24,4 @@ def execute_command(command: PreparedCommand) -> subprocess.CompletedProcess[str
         input=command.input_text,
         env=dict(command.env) if command.env is not None else None,
     )
+

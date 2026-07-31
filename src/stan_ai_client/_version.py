@@ -8,9 +8,7 @@ from pathlib import Path
 PACKAGE_NAME = "stan-ai-client"
 UNKNOWN_VERSION = "0.0.0"
 _PYPROJECT_PATH = Path(__file__).resolve().parents[2] / "pyproject.toml"
-_PROJECT_VERSION_RE = re.compile(
-    r'^(?P<prefix>\s*version\s*=\s*")(?P<version>[^"]+)(?P<suffix>".*)$'
-)
+_PROJECT_VERSION_RE = re.compile(r'^(?P<prefix>\s*version\s*=\s*")(?P<version>[^"]+)(?P<suffix>".*)$')
 _SEMVER_RE = re.compile(r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)$")
 
 
@@ -66,7 +64,7 @@ def bump_patch_version_in_text(text: str) -> tuple[str, str]:
         version_line_index = index
         current_version = match.group("version")
         new_version = bump_patch_version(current_version)
-        lines[index] = f"{match.group('prefix')}{new_version}{match.group('suffix')}\n"
+        lines[index] = f'{match.group("prefix")}{new_version}{match.group("suffix")}\n'
 
     if version_line_index is None or new_version is None:
         raise ValueError("Could not find a version entry in the [project] section")

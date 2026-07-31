@@ -196,9 +196,7 @@ class ClaudeJsonPayload:
             usage=raw_usage if isinstance(raw_usage, dict) else {},
             model_usage=raw_model_usage if isinstance(raw_model_usage, dict) else {},
             permission_denials=(
-                raw_permission_denials
-                if isinstance(raw_permission_denials, list)
-                else []
+                raw_permission_denials if isinstance(raw_permission_denials, list) else []
             ),
             uuid=data.get("uuid"),
             extras={key: value for key, value in data.items() if key not in used},
@@ -273,9 +271,7 @@ class GrokJsonPayload:
         session_id = _first_present(data, "sessionId", "session_id")
         request_id = _first_present(data, "requestId", "request_id")
         thought = data.get("thought")
-        structured_output = _first_present(
-            data, "structuredOutput", "structured_output"
-        )
+        structured_output = _first_present(data, "structuredOutput", "structured_output")
         return cls(
             text=text if isinstance(text, str) else None,
             stop_reason=stop_reason if isinstance(stop_reason, str) else None,

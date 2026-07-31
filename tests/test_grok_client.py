@@ -96,9 +96,7 @@ def test_policy_rules_are_repeated_flags(mock_exec: Mock) -> None:
 
 
 @patch("stan_ai_client.grok.execute_command")
-def test_permission_rules_and_tool_inventory_use_distinct_flags(
-    mock_exec: Mock,
-) -> None:
+def test_permission_rules_and_tool_inventory_use_distinct_flags(mock_exec: Mock) -> None:
     mock_exec.return_value.stdout = "ok\n"
     mock_exec.return_value.stderr = ""
     mock_exec.return_value.returncode = 0
@@ -181,9 +179,7 @@ def test_add_dirs_do_not_emit_cwd_flags(mock_exec: Mock) -> None:
 
 @patch("stan_ai_client.grok.execute_command")
 def test_run_json_success(mock_exec: Mock) -> None:
-    payload = (
-        '{"text": "ok", "stopReason": "EndTurn", "sessionId": "s1", "requestId": "r1"}'
-    )
+    payload = '{"text": "ok", "stopReason": "EndTurn", "sessionId": "s1", "requestId": "r1"}'
     mock_exec.return_value.stdout = payload
     mock_exec.return_value.stderr = ""
     mock_exec.return_value.returncode = 0
@@ -430,9 +426,7 @@ def test_run_structured_classifies_truncated_direct_stdout(mock_exec: Mock) -> N
 
 
 @patch("stan_ai_client.grok.execute_command")
-def test_run_structured_treats_non_ascii_digit_output_as_non_json(
-    mock_exec: Mock,
-) -> None:
+def test_run_structured_treats_non_ascii_digit_output_as_non_json(mock_exec: Mock) -> None:
     # "²".isdigit() is True, but a JSON number can only start with an ASCII digit
     # or "-", so this output never was JSON rather than being malformed JSON.
     mock_exec.return_value.stdout = "²3 tokens remaining"
@@ -1068,9 +1062,7 @@ def test_run_structured_classifies_cancellation_category_without_stop_reason(
 
 
 @patch("stan_ai_client.grok.execute_command")
-def test_malformed_protocol_error_keeps_raw_stdout_out_of_message(
-    mock_exec: Mock,
-) -> None:
+def test_malformed_protocol_error_keeps_raw_stdout_out_of_message(mock_exec: Mock) -> None:
     raw_stdout = "sensitive non-json model output"
     mock_exec.return_value.stdout = raw_stdout
     mock_exec.return_value.stderr = ""
@@ -1219,9 +1211,7 @@ def test_run_structured_rejects_envelope_without_structured_output(
 
 
 @patch("stan_ai_client.grok.execute_command")
-def test_run_structured_accepts_raw_text_with_metadata_like_keys(
-    mock_exec: Mock,
-) -> None:
+def test_run_structured_accepts_raw_text_with_metadata_like_keys(mock_exec: Mock) -> None:
     mock_exec.return_value.stdout = '{"text": "desc", "sessionId": "s1"}'
     mock_exec.return_value.stderr = ""
     mock_exec.return_value.returncode = 0
@@ -1389,9 +1379,7 @@ def test_resource_exhausted_raises_rate_limit_error(
 @patch("stan_ai_client.grok.execute_command")
 def test_missing_cwd_is_process_error(mock_exec: Mock) -> None:
     missing_cwd = "/tmp/missing-grok-cwd"
-    mock_exec.side_effect = FileNotFoundError(
-        2, "No such file or directory", missing_cwd
-    )
+    mock_exec.side_effect = FileNotFoundError(2, "No such file or directory", missing_cwd)
 
     client = GrokClient()
     with pytest.raises(GrokProcessError) as exc:

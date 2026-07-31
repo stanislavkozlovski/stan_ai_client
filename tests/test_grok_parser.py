@@ -22,9 +22,7 @@ def test_parse_success() -> None:
 
 
 def test_parse_structured() -> None:
-    text = (
-        '{"text": "{\\"x\\":1}", "stopReason": "EndTurn", "structuredOutput": {"x": 1}}'
-    )
+    text = '{"text": "{\\"x\\":1}", "stopReason": "EndTurn", "structuredOutput": {"x": 1}}'
     payload = parse_grok_json_payload(text)
     assert payload.has_structured_output is True
     assert payload.structured_output == {"x": 1}
@@ -44,9 +42,7 @@ def test_raw_structured_payload_preserves_structured_output_key() -> None:
 
 
 def test_raw_structured_payload_preserves_envelope_like_keys() -> None:
-    payload = raw_grok_structured_payload(
-        json.loads('{"text": "desc", "structuredOutput": "ok"}')
-    )
+    payload = raw_grok_structured_payload(json.loads('{"text": "desc", "structuredOutput": "ok"}'))
     assert payload.has_structured_output is True
     assert payload.structured_output == {"text": "desc", "structuredOutput": "ok"}
     assert payload.text is None
@@ -79,10 +75,7 @@ def test_summarize_error_prefers_text() -> None:
         thought=None,
         structured_output=None,
     )
-    assert (
-        summarize_grok_error_text(payload=payload, stdout="", stderr="")
-        == "result here"
-    )
+    assert summarize_grok_error_text(payload=payload, stdout="", stderr="") == "result here"
 
 
 def test_summarize_error_prefers_error_envelope_message() -> None:
