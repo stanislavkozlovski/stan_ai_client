@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 from collections.abc import Mapping
@@ -9,16 +10,19 @@ import pytest
 
 from stan_ai_client import (
     AIClientTimeoutError,
+    ClaudeCodeError,
     ClaudeCodeClient,
     CommandMetadata,
     ClaudeExecutableNotFoundError,
     ClaudeLimitError,
+    ClaudeNetworkUnavailableError,
     ClaudeProcessError,
     ClaudeProtocolError,
     ClaudeRateLimitError,
     ClaudeStructuredOutputMissingError,
     ClaudeStructuredOutputValidationError,
     ClaudeTimeoutError,
+    NetworkUnavailableError,
     RateLimitInfo,
     RateLimitRetryPolicy,
     RunOptions,
@@ -29,6 +33,7 @@ from stan_ai_client import (
 
 def test_client_module_reexports_legacy_symbols() -> None:
     from stan_ai_client.client import (  # noqa: PLC0415
+        ClaudeNetworkUnavailableError as ClientModuleClaudeNetworkUnavailableError,
         ClaudeProcessError as ClientModuleClaudeProcessError,
         JsonRunResult as ClientModuleJsonRunResult,
         RateLimitRetryPolicy as ClientModuleRateLimitRetryPolicy,
@@ -42,13 +47,15 @@ def test_client_module_reexports_legacy_symbols() -> None:
     assert ClientModuleTextRunResult.__name__ == "TextRunResult"
     assert ClientModuleRateLimitRetryPolicy is RateLimitRetryPolicy
     assert ClientModuleStructuredSchema is StructuredSchema
+    assert ClientModuleClaudeNetworkUnavailableError is ClaudeNetworkUnavailableError
     assert ClientModuleClaudeProcessError is ClaudeProcessError
 
 
 class RunRecorder:
     def __init__(
         self,
-        completed: subprocess.CompletedProcess[str] | list[subprocess.CompletedProcess[str]],
+        completed: subprocess.CompletedProcess[str]
+        | list[subprocess.CompletedProcess[str]],
     ) -> None:
         self.completed = completed if isinstance(completed, list) else [completed]
         self.calls: list[dict[str, Any]] = []
@@ -79,7 +86,9 @@ class RunRecorder:
         return self.completed[min(call_index, len(self.completed) - 1)]
 
 
-def test_run_json_uses_stdin_and_parses_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_json_uses_stdin_and_parses_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     recorder = RunRecorder(
         subprocess.CompletedProcess(
             args=[],
@@ -158,7 +167,9 @@ def test_run_json_raises_protocol_error_on_non_json_output(
         client.run_json("hello")
 
 
-def test_run_json_raises_process_error_with_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_json_raises_process_error_with_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     recorder = RunRecorder(
         subprocess.CompletedProcess(
             args=[],
@@ -178,6 +189,108 @@ def test_run_json_raises_process_error_with_payload(monkeypatch: pytest.MonkeyPa
     assert excinfo.value.payload.result == "permission denied"
 
 
+def test_claude_dns_error_uses_common_and_provider_network_types(
+    monkeypatch: pytest.MonkeyPatch,
+    july_31_dns_diagnostic: str,
+) -> None:
+    stdout = json.dumps(
+        {
+            "is_error": True,
+            "result": f"{july_31_dns_diagnostic}\nstream disconnected",
+        }
+    )
+    stderr = "provider stream disconnected"
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(NetworkUnavailableError) as excinfo:
+        ClaudeCodeClient().run_json("hello")
+
+    error = excinfo.value
+    assert isinstance(error, ClaudeNetworkUnavailableError)
+    assert isinstance(error, ClaudeProcessError)
+    assert isinstance(error, ClaudeCodeError)
+    assert error.command.argv[0] == "claude"
+    assert error.returncode == 1
+    assert error.stdout == stdout
+    assert error.stderr == stderr
+    assert error.payload is not None
+    assert error.payload.result == f"{july_31_dns_diagnostic}\nstream disconnected"
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        "Temporary failure in name resolution",
+        "Network is unreachable",
+        "No route to host",
+    ],
+)
+def test_claude_strong_stderr_network_diagnostics_are_classified(
+    monkeypatch: pytest.MonkeyPatch,
+    diagnostic: str,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr=diagnostic,
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(ClaudeNetworkUnavailableError):
+        ClaudeCodeClient().run_text("hello")
+
+
+def test_claude_ignores_network_prose_in_stdout_and_disconnect_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = json.dumps(
+        {
+            "is_error": False,
+            "result": "diff --git a/doc.md b/doc.md\n+network is unreachable",
+        }
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=stdout,
+            stderr="stream disconnected",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(ClaudeProcessError) as excinfo:
+        ClaudeCodeClient().run_text("quote the diff")
+
+    assert type(excinfo.value) is ClaudeProcessError
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+
+
+def test_claude_successful_network_prose_is_ordinary_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = "The documentation says network is unreachable.\n"
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    result = ClaudeCodeClient().run_text("quote the documentation")
+
+    assert result.text == stdout.strip()
+
+
 def test_run_json_raises_rate_limit_error(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = RunRecorder(
         subprocess.CompletedProcess(
@@ -194,9 +307,12 @@ def test_run_json_raises_rate_limit_error(monkeypatch: pytest.MonkeyPatch) -> No
         client.run_json("hello")
 
     assert excinfo.value.rate_limit.retry_after_seconds == 3660
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
 
 
-def test_run_json_raises_limit_error_for_hit_your_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_json_raises_limit_error_for_hit_your_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     recorder = RunRecorder(
         subprocess.CompletedProcess(
             args=[],
@@ -280,7 +396,9 @@ def test_rate_limit_policy_refuses_json_wait_over_budget(
     with pytest.raises(ClaudeRateLimitError) as excinfo:
         client.run_json(
             "hello",
-            rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=5, label="json test"),
+            rate_limit_policy=RateLimitRetryPolicy(
+                max_wait_seconds=5, label="json test"
+            ),
         )
 
     assert excinfo.value.retry_after_seconds == 70
@@ -427,7 +545,9 @@ def test_rate_limit_policy_retries_text_mode(monkeypatch: pytest.MonkeyPatch) ->
     assert sleeps == [62.0]
 
 
-def test_rate_limit_policy_retries_structured_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rate_limit_policy_retries_structured_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     recorder = RunRecorder(
         [
             subprocess.CompletedProcess(

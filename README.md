@@ -320,6 +320,26 @@ except ClaudeRateLimitError as exc:
     print(exc.reset_at or exc.retry_after_seconds)
 ```
 
+Catch `NetworkUnavailableError` to handle proven local DNS or outbound-routing
+failures the same way for Claude, Codex, and Grok. Provider-specific catches
+remain available through `ClaudeNetworkUnavailableError`,
+`CodexNetworkUnavailableError`, and `GrokNetworkUnavailableError`.
+
+```python
+from stan_ai_client import NetworkUnavailableError
+
+try:
+    result = client.run_json("Summarize this repository.")
+except NetworkUnavailableError as exc:
+    print(exc.stderr)
+```
+
+The exception preserves the command metadata, return code, stdout, stderr, and
+parsed payload. The client classifies only strong DNS and routing diagnostics
+from process stderr or provider-declared error records; ordinary model output,
+prompts, and diffs are not inspected. Retry and scheduling policy belongs to
+the caller.
+
 ## Public Surface
 
 Top-level exports:
@@ -365,6 +385,10 @@ from stan_ai_client import (
     ClaudeProcessError,
     CodexProcessError,
     GrokProcessError,
+    NetworkUnavailableError,
+    ClaudeNetworkUnavailableError,
+    CodexNetworkUnavailableError,
+    GrokNetworkUnavailableError,
     ClaudeProtocolError,
     CodexProtocolError,
     GrokProtocolError,

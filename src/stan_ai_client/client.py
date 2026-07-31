@@ -9,6 +9,7 @@ from .claude import (
 )
 from .exceptions import (
     ClaudeExecutableNotFoundError,
+    ClaudeNetworkUnavailableError,
     ClaudeProcessError,
     ClaudeProtocolError,
     ClaudeRateLimitError,
@@ -37,6 +38,7 @@ __all__ = [
     "ClaudeCodeClient",
     "ClaudeEffort",
     "ClaudeJsonPayload",
+    "ClaudeNetworkUnavailableError",
     "ClaudeProcessError",
     "ClaudeProtocolError",
     "ClaudeRateLimitError",

@@ -10,8 +10,11 @@ import pytest
 from stan_ai_client import (
     GrokCancelledError,
     GrokClient,
+    GrokCodeError,
     GrokMalformedStructuredOutputError,
+    GrokNetworkUnavailableError,
     GrokRunOptions,
+    NetworkUnavailableError,
 )
 from stan_ai_client.exceptions import (
     GrokExecutableNotFoundError,
@@ -93,7 +96,9 @@ def test_policy_rules_are_repeated_flags(mock_exec: Mock) -> None:
 
 
 @patch("stan_ai_client.grok.execute_command")
-def test_permission_rules_and_tool_inventory_use_distinct_flags(mock_exec: Mock) -> None:
+def test_permission_rules_and_tool_inventory_use_distinct_flags(
+    mock_exec: Mock,
+) -> None:
     mock_exec.return_value.stdout = "ok\n"
     mock_exec.return_value.stderr = ""
     mock_exec.return_value.returncode = 0
@@ -176,7 +181,9 @@ def test_add_dirs_do_not_emit_cwd_flags(mock_exec: Mock) -> None:
 
 @patch("stan_ai_client.grok.execute_command")
 def test_run_json_success(mock_exec: Mock) -> None:
-    payload = '{"text": "ok", "stopReason": "EndTurn", "sessionId": "s1", "requestId": "r1"}'
+    payload = (
+        '{"text": "ok", "stopReason": "EndTurn", "sessionId": "s1", "requestId": "r1"}'
+    )
     mock_exec.return_value.stdout = payload
     mock_exec.return_value.stderr = ""
     mock_exec.return_value.returncode = 0
@@ -203,6 +210,71 @@ def test_run_json_error_envelope_raises_process_error(mock_exec: Mock) -> None:
     assert exc.value.returncode == 0
     assert exc.value.payload is not None
     assert exc.value.payload.extras["type"] == "error"
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_grok_dns_error_uses_common_and_provider_network_types(
+    mock_exec: Mock,
+    july_31_dns_diagnostic: str,
+) -> None:
+    stdout = json.dumps(
+        {
+            "type": "error",
+            "message": f"{july_31_dns_diagnostic}\nstream disconnected",
+        }
+    )
+    stderr = "provider stream disconnected"
+    mock_exec.return_value.stdout = stdout
+    mock_exec.return_value.stderr = stderr
+    mock_exec.return_value.returncode = 1
+
+    with pytest.raises(NetworkUnavailableError) as excinfo:
+        GrokClient().run_json("hello")
+
+    error = excinfo.value
+    assert isinstance(error, GrokNetworkUnavailableError)
+    assert isinstance(error, GrokProcessError)
+    assert isinstance(error, GrokCodeError)
+    assert error.command.argv[0] == "grok"
+    assert error.returncode == 1
+    assert error.stdout == stdout
+    assert error.stderr == stderr
+    assert error.payload is not None
+    assert error.payload.extras["message"] == (
+        f"{july_31_dns_diagnostic}\nstream disconnected"
+    )
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_grok_ignores_network_prose_in_stdout_and_disconnect_alone(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "text": "diff --git a/doc.md b/doc.md\n+network is unreachable",
+            "stopReason": "EndTurn",
+        }
+    )
+    mock_exec.return_value.stderr = "stream disconnected"
+    mock_exec.return_value.returncode = 1
+
+    with pytest.raises(GrokProcessError) as excinfo:
+        GrokClient().run_text("quote the diff")
+
+    assert type(excinfo.value) is GrokProcessError
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_grok_successful_network_prose_is_ordinary_output(mock_exec: Mock) -> None:
+    stdout = "The documentation says network is unreachable.\n"
+    mock_exec.return_value.stdout = stdout
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    result = GrokClient().run_text("quote the documentation")
+
+    assert result.text == stdout.strip()
 
 
 @patch("stan_ai_client.grok.execute_command")
@@ -358,7 +430,9 @@ def test_run_structured_classifies_truncated_direct_stdout(mock_exec: Mock) -> N
 
 
 @patch("stan_ai_client.grok.execute_command")
-def test_run_structured_treats_non_ascii_digit_output_as_non_json(mock_exec: Mock) -> None:
+def test_run_structured_treats_non_ascii_digit_output_as_non_json(
+    mock_exec: Mock,
+) -> None:
     # "²".isdigit() is True, but a JSON number can only start with an ASCII digit
     # or "-", so this output never was JSON rather than being malformed JSON.
     mock_exec.return_value.stdout = "²3 tokens remaining"
@@ -994,7 +1068,9 @@ def test_run_structured_classifies_cancellation_category_without_stop_reason(
 
 
 @patch("stan_ai_client.grok.execute_command")
-def test_malformed_protocol_error_keeps_raw_stdout_out_of_message(mock_exec: Mock) -> None:
+def test_malformed_protocol_error_keeps_raw_stdout_out_of_message(
+    mock_exec: Mock,
+) -> None:
     raw_stdout = "sensitive non-json model output"
     mock_exec.return_value.stdout = raw_stdout
     mock_exec.return_value.stderr = ""
@@ -1143,7 +1219,9 @@ def test_run_structured_rejects_envelope_without_structured_output(
 
 
 @patch("stan_ai_client.grok.execute_command")
-def test_run_structured_accepts_raw_text_with_metadata_like_keys(mock_exec: Mock) -> None:
+def test_run_structured_accepts_raw_text_with_metadata_like_keys(
+    mock_exec: Mock,
+) -> None:
     mock_exec.return_value.stdout = '{"text": "desc", "sessionId": "s1"}'
     mock_exec.return_value.stderr = ""
     mock_exec.return_value.returncode = 0
@@ -1302,14 +1380,18 @@ def test_resource_exhausted_raises_rate_limit_error(
     mock_exec.return_value.returncode = 1
 
     client = GrokClient()
-    with pytest.raises(GrokRateLimitError):
+    with pytest.raises(GrokRateLimitError) as excinfo:
         client.run_text("fail")
+
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
 
 
 @patch("stan_ai_client.grok.execute_command")
 def test_missing_cwd_is_process_error(mock_exec: Mock) -> None:
     missing_cwd = "/tmp/missing-grok-cwd"
-    mock_exec.side_effect = FileNotFoundError(2, "No such file or directory", missing_cwd)
+    mock_exec.side_effect = FileNotFoundError(
+        2, "No such file or directory", missing_cwd
+    )
 
     client = GrokClient()
     with pytest.raises(GrokProcessError) as exc:

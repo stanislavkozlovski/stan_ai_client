@@ -33,7 +33,9 @@ class StructuredSchema(Generic[TStructured]):
             Draft202012Validator.check_schema(schema_copy)
             cli_json = json.dumps(schema_copy, separators=(",", ":"))
         except (SchemaError, TypeError, ValueError) as exc:
-            raise StructuredSchemaValidationError(f"Invalid structured schema: {exc}") from exc
+            raise StructuredSchemaValidationError(
+                f"Invalid structured schema: {exc}"
+            ) from exc
 
         return cls(
             schema=schema_copy,

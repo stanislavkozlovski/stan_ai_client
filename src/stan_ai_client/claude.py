@@ -11,9 +11,11 @@ from typing import Any, Callable, Mapping, TypeVar
 from jsonschema.exceptions import ValidationError
 
 from ._options import first_set, first_set_or
+from ._network import has_claude_network_unavailable_evidence
 from ._retry import run_with_rate_limit_retry
 from .exceptions import (
     ClaudeExecutableNotFoundError,
+    ClaudeNetworkUnavailableError,
     ClaudeProcessError,
     ClaudeProtocolError,
     ClaudeRateLimitError,
@@ -102,9 +104,15 @@ class ClaudeCodeClient:
             rate_limit_policy=rate_limit_policy,
         )
 
-    def _run_text_once(self, prompt: str, *, options: RunOptions | None = None) -> TextRunResult:
-        prepared, effective = self._prepare(prompt, output_format="text", options=options)
-        self._log_start(prompt, output_format="text", prepared=prepared, effective=effective)
+    def _run_text_once(
+        self, prompt: str, *, options: RunOptions | None = None
+    ) -> TextRunResult:
+        prepared, effective = self._prepare(
+            prompt, output_format="text", options=options
+        )
+        self._log_start(
+            prompt, output_format="text", prepared=prepared, effective=effective
+        )
         completed, metadata = self._execute(prepared)
         stdout = completed.stdout
         stderr = completed.stderr
@@ -156,10 +164,18 @@ class ClaudeCodeClient:
             rate_limit_policy=rate_limit_policy,
         )
 
-    def _run_json_once(self, prompt: str, *, options: RunOptions | None = None) -> JsonRunResult:
-        prepared, effective = self._prepare(prompt, output_format="json", options=options)
-        self._log_start(prompt, output_format="json", prepared=prepared, effective=effective)
-        completed, metadata, payload = self._execute_json(prepared, protocol_name="JSON mode")
+    def _run_json_once(
+        self, prompt: str, *, options: RunOptions | None = None
+    ) -> JsonRunResult:
+        prepared, effective = self._prepare(
+            prompt, output_format="json", options=options
+        )
+        self._log_start(
+            prompt, output_format="json", prepared=prepared, effective=effective
+        )
+        completed, metadata, payload = self._execute_json(
+            prepared, protocol_name="JSON mode"
+        )
 
         result = JsonRunResult(
             command=metadata,
@@ -203,8 +219,12 @@ class ClaudeCodeClient:
             options=options,
             json_schema=schema,
         )
-        self._log_start(prompt, output_format="json", prepared=prepared, effective=effective)
-        self.logger.debug("Claude structured mode enabled schema_validated_locally=True")
+        self._log_start(
+            prompt, output_format="json", prepared=prepared, effective=effective
+        )
+        self.logger.debug(
+            "Claude structured mode enabled schema_validated_locally=True"
+        )
 
         completed, metadata, payload = self._execute_json(
             prepared,
@@ -228,7 +248,9 @@ class ClaudeCodeClient:
         try:
             structured_output = schema.validate_response(payload.structured_output)
         except ValidationError as exc:
-            self.logger.debug("Claude structured_output validation failed error=%s", exc.message)
+            self.logger.debug(
+                "Claude structured_output validation failed error=%s", exc.message
+            )
             validation_error = ClaudeStructuredOutputValidationError(
                 f"Claude returned structured_output that does not match the schema: {exc.message}",
                 command=metadata,
@@ -285,7 +307,9 @@ class ClaudeCodeClient:
         argv = [self.executable]
 
         if effective.session_id is not None and effective.continue_last_session:
-            raise ValueError("RunOptions cannot set both session_id and continue_last_session")
+            raise ValueError(
+                "RunOptions cannot set both session_id and continue_last_session"
+            )
 
         if effective.session_id is not None:
             argv.extend(["--resume", effective.session_id])
@@ -390,7 +414,9 @@ class ClaudeCodeClient:
         try:
             completed = execute_command(prepared)
         except FileNotFoundError as exc:
-            self.logger.error("Claude executable not found executable=%s", self.executable)
+            self.logger.error(
+                "Claude executable not found executable=%s", self.executable
+            )
             raise ClaudeExecutableNotFoundError(self.executable) from exc
         except TimeoutExpired as exc:
             metadata = CommandMetadata(
@@ -444,6 +470,22 @@ class ClaudeCodeClient:
                 rate_limit=rate_limit,
             )
 
+        if has_claude_network_unavailable_evidence(payload=payload, stderr=stderr):
+            self.logger.warning(
+                "Claude run failed returncode=%d elapsed_ms=%.0f network_unavailable=true error=%s",
+                returncode,
+                command.elapsed_ms,
+                error_text,
+            )
+            return ClaudeNetworkUnavailableError(
+                error_text,
+                command=command,
+                returncode=returncode,
+                stdout=stdout,
+                stderr=stderr,
+                payload=payload,
+            )
+
         self.logger.warning(
             "Claude run failed returncode=%d elapsed_ms=%.0f error=%s",
             returncode,
@@ -464,8 +506,12 @@ class ClaudeCodeClient:
         default = self.default_options
         return ResolvedRunOptions(
             cwd=first_set(override.cwd, default.cwd),
-            model=first_set_or(override.model, default.model, default=self.default_model),
-            effort=first_set_or(override.effort, default.effort, default=self.default_effort),
+            model=first_set_or(
+                override.model, default.model, default=self.default_model
+            ),
+            effort=first_set_or(
+                override.effort, default.effort, default=self.default_effort
+            ),
             timeout_seconds=float(
                 first_set_or(
                     override.timeout_seconds,
@@ -477,10 +523,14 @@ class ClaudeCodeClient:
                 override.input_mode, default.input_mode, default="stdin"
             ),
             allowed_tools=first_set(override.allowed_tools, default.allowed_tools),
-            disallowed_tools=first_set(override.disallowed_tools, default.disallowed_tools),
+            disallowed_tools=first_set(
+                override.disallowed_tools, default.disallowed_tools
+            ),
             tools=first_set(override.tools, default.tools),
             add_dirs=first_set(override.add_dirs, default.add_dirs),
-            permission_mode=first_set(override.permission_mode, default.permission_mode),
+            permission_mode=first_set(
+                override.permission_mode, default.permission_mode
+            ),
             system_prompt=first_set(override.system_prompt, default.system_prompt),
             append_system_prompt=first_set(
                 override.append_system_prompt, default.append_system_prompt
@@ -488,7 +538,9 @@ class ClaudeCodeClient:
             settings=first_set(override.settings, default.settings),
             session_id=first_set(override.session_id, default.session_id),
             continue_last_session=first_set_or(
-                override.continue_last_session, default.continue_last_session, default=False
+                override.continue_last_session,
+                default.continue_last_session,
+                default=False,
             ),
             fork_session=first_set_or(
                 override.fork_session, default.fork_session, default=False

@@ -39,8 +39,14 @@ class ProcessError(AIClientError):
         super().__init__(message)
 
 
+class NetworkUnavailableError(ProcessError):
+    """A proven local DNS or outbound-routing failure."""
+
+
 class ProtocolError(AIClientError):
-    def __init__(self, message: str, *, command: CommandMetadata, stdout: str, stderr: str) -> None:
+    def __init__(
+        self, message: str, *, command: CommandMetadata, stdout: str, stderr: str
+    ) -> None:
         self.command = command
         self.stdout = stdout
         self.stderr = stderr
@@ -142,6 +148,10 @@ class ClaudeProcessError(ProcessError, ClaudeCodeError):
     payload: ClaudeJsonPayload | None
 
 
+class ClaudeNetworkUnavailableError(NetworkUnavailableError, ClaudeProcessError):
+    payload: ClaudeJsonPayload | None
+
+
 class ClaudeProtocolError(ProtocolError, ClaudeCodeError):
     pass
 
@@ -224,11 +234,17 @@ class CodexProcessError(ProcessError, CodexCodeError):
     payload: CodexJsonPayload | None
 
 
+class CodexNetworkUnavailableError(NetworkUnavailableError, CodexProcessError):
+    payload: CodexJsonPayload | None
+
+
 class CodexProtocolError(ProtocolError, CodexCodeError):
     pass
 
 
-class CodexStructuredOutputMissingError(StructuredOutputMissingError, CodexProtocolError):
+class CodexStructuredOutputMissingError(
+    StructuredOutputMissingError, CodexProtocolError
+):
     payload: CodexJsonPayload
 
 
@@ -282,6 +298,10 @@ class GrokTimeoutError(AIClientTimeoutError, GrokCodeError):
 
 
 class GrokProcessError(ProcessError, GrokCodeError):
+    payload: GrokJsonPayload | None
+
+
+class GrokNetworkUnavailableError(NetworkUnavailableError, GrokProcessError):
     payload: GrokJsonPayload | None
 
 
@@ -356,9 +376,7 @@ class GrokMalformedStructuredOutputError(GrokProtocolError):
         super().__init__(message, command=command, stdout=stdout, stderr=stderr)
 
 
-class GrokStructuredOutputMissingError(
-    StructuredOutputMissingError, GrokProtocolError
-):
+class GrokStructuredOutputMissingError(StructuredOutputMissingError, GrokProtocolError):
     payload: GrokJsonPayload
 
 

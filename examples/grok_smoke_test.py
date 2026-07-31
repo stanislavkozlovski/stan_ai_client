@@ -28,7 +28,10 @@ def main() -> None:
 
     print("\n=== Grok JSON mode ===")
     resj = client.run_json("Return a short greeting as JSON with key 'msg'.")
-    print("payload keys:", list(resj.payload.extras.keys()) if resj.payload.extras else "basic")
+    print(
+        "payload keys:",
+        list(resj.payload.extras.keys()) if resj.payload.extras else "basic",
+    )
     print("text:", resj.payload.text[:80] if resj.payload.text else None)
 
     print("\n=== Grok structured ===")

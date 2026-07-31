@@ -13,6 +13,7 @@ from typing import Any, Callable, Mapping, TypeVar
 from jsonschema.exceptions import ValidationError
 
 from ._options import first_set, first_set_or
+from ._network import has_codex_network_unavailable_evidence
 from ._retry import run_with_rate_limit_retry
 from .codex_parser import (
     make_codex_structured_payload,
@@ -21,6 +22,7 @@ from .codex_parser import (
 )
 from .exceptions import (
     CodexExecutableNotFoundError,
+    CodexNetworkUnavailableError,
     CodexProcessError,
     CodexProtocolError,
     CodexRateLimitError,
@@ -127,7 +129,9 @@ class CodexClient:
         self, prompt: str, *, options: CodexRunOptions | None = None
     ) -> TextRunResult:
         prepared, effective = self._prepare(prompt, options=options)
-        self._log_start(prompt, output_format="text", prepared=prepared, effective=effective)
+        self._log_start(
+            prompt, output_format="text", prepared=prepared, effective=effective
+        )
         completed, metadata = self._execute(prepared)
         stdout = completed.stdout
         stderr = completed.stderr
@@ -173,7 +177,9 @@ class CodexClient:
         self, prompt: str, *, options: CodexRunOptions | None = None
     ) -> CodexJsonRunResult:
         prepared, effective = self._prepare(prompt, options=options, json_output=True)
-        self._log_start(prompt, output_format="jsonl", prepared=prepared, effective=effective)
+        self._log_start(
+            prompt, output_format="jsonl", prepared=prepared, effective=effective
+        )
         completed, metadata = self._execute(prepared)
         stdout = completed.stdout
         stderr = completed.stderr
@@ -270,7 +276,9 @@ class CodexClient:
             options=options,
             output_schema_path=schema_path,
         )
-        self._log_start(prompt, output_format="structured", prepared=prepared, effective=effective)
+        self._log_start(
+            prompt, output_format="structured", prepared=prepared, effective=effective
+        )
         self.logger.debug("Codex structured mode enabled schema_validated_locally=True")
 
         completed, metadata = self._execute(prepared)
@@ -318,7 +326,9 @@ class CodexClient:
         try:
             structured_output = schema.validate_response(raw_structured_output)
         except ValidationError as exc:
-            self.logger.debug("Codex structured_output validation failed error=%s", exc.message)
+            self.logger.debug(
+                "Codex structured_output validation failed error=%s", exc.message
+            )
             validation_error = CodexStructuredOutputValidationError(
                 f"Codex returned structured output that does not match the schema: {exc.message}",
                 command=metadata,
@@ -372,7 +382,9 @@ class CodexClient:
     ) -> tuple[PreparedCommand, ResolvedCodexRunOptions]:
         effective = self._resolve_options(options)
         if effective.session_id is not None and effective.continue_last_session:
-            raise ValueError("CodexRunOptions cannot set both session_id and continue_last_session")
+            raise ValueError(
+                "CodexRunOptions cannot set both session_id and continue_last_session"
+            )
 
         argv = [self.executable, "exec"]
         is_resume = effective.session_id is not None or effective.continue_last_session
@@ -429,7 +441,9 @@ class CodexClient:
         if effective.model:
             argv.extend(["--model", effective.model])
         if effective.reasoning_effort:
-            argv.extend(["-c", f'model_reasoning_effort="{effective.reasoning_effort}"'])
+            argv.extend(
+                ["-c", f'model_reasoning_effort="{effective.reasoning_effort}"']
+            )
         if effective.permission_mode == "bypassPermissions":
             argv.append(BYPASS_APPROVALS_AND_SANDBOX_FLAG)
         if effective.cwd is not None:
@@ -466,7 +480,9 @@ class CodexClient:
                     cwd=prepared.cwd,
                     elapsed_ms=(time.monotonic() - started_at) * 1000,
                 )
-                self.logger.error("Codex working directory not found cwd=%s", prepared.cwd)
+                self.logger.error(
+                    "Codex working directory not found cwd=%s", prepared.cwd
+                )
                 raise CodexProcessError(
                     f"Codex working directory not found: {prepared.cwd}",
                     command=metadata,
@@ -476,7 +492,9 @@ class CodexClient:
                     payload=None,
                 ) from exc
 
-            self.logger.error("Codex executable not found executable=%s", self.executable)
+            self.logger.error(
+                "Codex executable not found executable=%s", self.executable
+            )
             raise CodexExecutableNotFoundError(self.executable) from exc
         except TimeoutExpired as exc:
             metadata = CommandMetadata(
@@ -509,7 +527,9 @@ class CodexClient:
         stderr: str,
         payload: CodexJsonPayload | None,
     ) -> CodexProcessError:
-        error_text = summarize_codex_error_text(payload=payload, stdout=stdout, stderr=stderr)
+        error_text = summarize_codex_error_text(
+            payload=payload, stdout=stdout, stderr=stderr
+        )
         if is_rate_limit_text(error_text):
             rate_limit = parse_rate_limit_info(error_text)
             self.logger.warning(
@@ -530,6 +550,22 @@ class CodexClient:
                 rate_limit=rate_limit,
             )
 
+        if has_codex_network_unavailable_evidence(payload=payload, stderr=stderr):
+            self.logger.warning(
+                "Codex run failed returncode=%d elapsed_ms=%.0f network_unavailable=true error=%s",
+                returncode,
+                command.elapsed_ms,
+                error_text,
+            )
+            return CodexNetworkUnavailableError(
+                error_text,
+                command=command,
+                returncode=returncode,
+                stdout=stdout,
+                stderr=stderr,
+                payload=payload,
+            )
+
         self.logger.warning(
             "Codex run failed returncode=%d elapsed_ms=%.0f error=%s",
             returncode,
@@ -545,12 +581,16 @@ class CodexClient:
             payload=payload,
         )
 
-    def _resolve_options(self, options: CodexRunOptions | None) -> ResolvedCodexRunOptions:
+    def _resolve_options(
+        self, options: CodexRunOptions | None
+    ) -> ResolvedCodexRunOptions:
         override = options or CodexRunOptions()
         default = self.default_options
         return ResolvedCodexRunOptions(
             cwd=first_set(override.cwd, default.cwd),
-            model=first_set_or(override.model, default.model, default=self.default_model),
+            model=first_set_or(
+                override.model, default.model, default=self.default_model
+            ),
             reasoning_effort=first_set_or(
                 override.reasoning_effort,
                 default.reasoning_effort,
@@ -573,7 +613,9 @@ class CodexClient:
             ),
             session_id=first_set(override.session_id, default.session_id),
             continue_last_session=first_set_or(
-                override.continue_last_session, default.continue_last_session, default=False
+                override.continue_last_session,
+                default.continue_last_session,
+                default=False,
             ),
             skip_git_repo_check=first_set_or(
                 override.skip_git_repo_check, default.skip_git_repo_check, default=False
@@ -586,7 +628,9 @@ class CodexClient:
             ),
             add_dirs=first_set(override.add_dirs, default.add_dirs),
             profile=first_set(override.profile, default.profile),
-            config_overrides=first_set(override.config_overrides, default.config_overrides),
+            config_overrides=first_set(
+                override.config_overrides, default.config_overrides
+            ),
             extra_args=first_set(override.extra_args, default.extra_args),
             resume_extra_args=first_set(
                 override.resume_extra_args, default.resume_extra_args
@@ -797,9 +841,13 @@ def _iter_codex_output_schema_errors(
         if node.get("additionalProperties") is not False:
             errors.append(f"{path}.additionalProperties must be false")
 
-    errors.extend(_iter_schema_mapping_errors(node.get("properties"), f"{path}.properties"))
+    errors.extend(
+        _iter_schema_mapping_errors(node.get("properties"), f"{path}.properties")
+    )
     errors.extend(_iter_schema_mapping_errors(node.get("$defs"), f"{path}.$defs"))
-    errors.extend(_iter_schema_mapping_errors(node.get("definitions"), f"{path}.definitions"))
+    errors.extend(
+        _iter_schema_mapping_errors(node.get("definitions"), f"{path}.definitions")
+    )
 
     items = node.get("items")
     if isinstance(items, dict):

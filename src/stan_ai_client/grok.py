@@ -14,11 +14,13 @@ from urllib.parse import unquote
 from jsonschema.exceptions import ValidationError
 
 from ._options import first_set, first_set_or
+from ._network import has_grok_network_unavailable_evidence
 from ._retry import run_with_rate_limit_retry
 from .exceptions import (
     GrokCancelledError,
     GrokExecutableNotFoundError,
     GrokMalformedStructuredOutputError,
+    GrokNetworkUnavailableError,
     GrokProcessError,
     GrokProtocolError,
     GrokRateLimitError,
@@ -121,9 +123,15 @@ class GrokClient:
             rate_limit_policy=rate_limit_policy,
         )
 
-    def _run_text_once(self, prompt: str, *, options: GrokRunOptions | None = None) -> TextRunResult:
-        prepared, effective = self._prepare(prompt, output_format="plain", options=options)
-        self._log_start(prompt, output_format="plain", prepared=prepared, effective=effective)
+    def _run_text_once(
+        self, prompt: str, *, options: GrokRunOptions | None = None
+    ) -> TextRunResult:
+        prepared, effective = self._prepare(
+            prompt, output_format="plain", options=options
+        )
+        self._log_start(
+            prompt, output_format="plain", prepared=prepared, effective=effective
+        )
         completed, metadata = self._execute(prepared)
         stdout = completed.stdout
         stderr = completed.stderr
@@ -176,10 +184,18 @@ class GrokClient:
             rate_limit_policy=rate_limit_policy,
         )
 
-    def _run_json_once(self, prompt: str, *, options: GrokRunOptions | None = None) -> GrokJsonRunResult:
-        prepared, effective = self._prepare(prompt, output_format="json", options=options)
-        self._log_start(prompt, output_format="json", prepared=prepared, effective=effective)
-        completed, metadata, payload = self._execute_json(prepared, protocol_name="JSON mode")
+    def _run_json_once(
+        self, prompt: str, *, options: GrokRunOptions | None = None
+    ) -> GrokJsonRunResult:
+        prepared, effective = self._prepare(
+            prompt, output_format="json", options=options
+        )
+        self._log_start(
+            prompt, output_format="json", prepared=prepared, effective=effective
+        )
+        completed, metadata, payload = self._execute_json(
+            prepared, protocol_name="JSON mode"
+        )
 
         result = GrokJsonRunResult(
             command=metadata,
@@ -223,7 +239,9 @@ class GrokClient:
             options=options,
             json_schema=schema,
         )
-        self._log_start(prompt, output_format="json", prepared=prepared, effective=effective)
+        self._log_start(
+            prompt, output_format="json", prepared=prepared, effective=effective
+        )
         self.logger.debug("Grok structured mode enabled schema_validated_locally=True")
 
         completed, metadata = self._execute(prepared)
@@ -445,7 +463,9 @@ class GrokClient:
         if explicit_raw is not None:
             return explicit_raw
 
-        assert first_error is not None  # candidates is never empty in "validate" outcomes
+        assert (
+            first_error is not None
+        )  # candidates is never empty in "validate" outcomes
         self._raise_structured_validation_error(
             schema_error=first_error,
             completed=completed,
@@ -539,7 +559,9 @@ class GrokClient:
         payload: GrokJsonPayload,
         structured_output: object,
     ) -> NoReturn:
-        self.logger.debug("Grok structuredOutput validation failed error=%s", schema_error.message)
+        self.logger.debug(
+            "Grok structuredOutput validation failed error=%s", schema_error.message
+        )
         error = GrokStructuredOutputValidationError(
             f"Grok returned structured output that does not match the schema: {schema_error.message}",
             command=metadata,
@@ -577,7 +599,9 @@ class GrokClient:
         argv: list[str] = [self.executable, "--no-auto-update"]
 
         if effective.session_id is not None and effective.continue_last_session:
-            raise ValueError("GrokRunOptions cannot set both session_id and continue_last_session")
+            raise ValueError(
+                "GrokRunOptions cannot set both session_id and continue_last_session"
+            )
 
         if effective.session_id is not None:
             argv.extend(["--session-id", effective.session_id])
@@ -590,7 +614,9 @@ class GrokClient:
         # Transparent prompt delivery
         prompt_file_path = None
         if len(prompt) > PROMPT_FILE_THRESHOLD:
-            fd, tmp_path = tempfile.mkstemp(prefix="grok_prompt_", suffix=".txt", text=True)
+            fd, tmp_path = tempfile.mkstemp(
+                prefix="grok_prompt_", suffix=".txt", text=True
+            )
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.write(prompt)
@@ -649,7 +675,9 @@ class GrokClient:
         )
         return prepared, effective
 
-    def _execute(self, prepared: PreparedGrokCommand) -> tuple[CompletedProcess[str], CommandMetadata]:
+    def _execute(
+        self, prepared: PreparedGrokCommand
+    ) -> tuple[CompletedProcess[str], CommandMetadata]:
         started_at = time.monotonic()
         tmp_path = prepared.prompt_file_path
         try:
@@ -661,7 +689,9 @@ class GrokClient:
                     cwd=prepared.cwd,
                     elapsed_ms=(time.monotonic() - started_at) * 1000,
                 )
-                self.logger.error("Grok working directory not found cwd=%s", prepared.cwd)
+                self.logger.error(
+                    "Grok working directory not found cwd=%s", prepared.cwd
+                )
                 raise GrokProcessError(
                     f"Grok working directory not found: {prepared.cwd}",
                     command=metadata,
@@ -671,7 +701,9 @@ class GrokClient:
                     payload=None,
                 ) from exc
 
-            self.logger.error("Grok executable not found executable=%s", self.executable)
+            self.logger.error(
+                "Grok executable not found executable=%s", self.executable
+            )
             raise GrokExecutableNotFoundError(self.executable) from exc
         except TimeoutExpired as exc:
             metadata = CommandMetadata(
@@ -704,10 +736,14 @@ class GrokClient:
             except FileNotFoundError:
                 pass
             except Exception as exc:
-                self.logger.debug("Failed to cleanup grok prompt temp file %s: %s", tmp_path, exc)
+                self.logger.debug(
+                    "Failed to cleanup grok prompt temp file %s: %s", tmp_path, exc
+                )
 
     @overload
-    def _stamp(self, payload: GrokJsonPayload, metadata: CommandMetadata) -> GrokJsonPayload: ...
+    def _stamp(
+        self, payload: GrokJsonPayload, metadata: CommandMetadata
+    ) -> GrokJsonPayload: ...
 
     @overload
     def _stamp(self, payload: None, metadata: CommandMetadata) -> None: ...
@@ -811,7 +847,9 @@ class GrokClient:
         stderr: str,
         payload: GrokJsonPayload | None,
     ) -> GrokProcessError:
-        error_text = summarize_grok_error_text(payload=payload, stdout=stdout, stderr=stderr)
+        error_text = summarize_grok_error_text(
+            payload=payload, stdout=stdout, stderr=stderr
+        )
         if is_grok_rate_limit_text(error_text):
             rate_limit = parse_rate_limit_info(error_text)
             self.logger.warning(
@@ -832,6 +870,22 @@ class GrokClient:
                 rate_limit=rate_limit,
             )
 
+        if has_grok_network_unavailable_evidence(payload=payload, stderr=stderr):
+            self.logger.warning(
+                "Grok run failed returncode=%d elapsed_ms=%.0f network_unavailable=true error=%s",
+                returncode,
+                command.elapsed_ms,
+                error_text,
+            )
+            return GrokNetworkUnavailableError(
+                error_text,
+                command=command,
+                returncode=returncode,
+                stdout=stdout,
+                stderr=stderr,
+                payload=payload,
+            )
+
         self.logger.warning(
             "Grok run failed returncode=%d elapsed_ms=%.0f error=%s",
             returncode,
@@ -847,7 +901,9 @@ class GrokClient:
             payload=payload,
         )
 
-    def _resolve_options(self, options: GrokRunOptions | None) -> ResolvedGrokRunOptions:
+    def _resolve_options(
+        self, options: GrokRunOptions | None
+    ) -> ResolvedGrokRunOptions:
         override = options or GrokRunOptions()
         default = self.default_options
         model = first_set_or(override.model, default.model, default=self.default_model)
@@ -865,10 +921,14 @@ class GrokClient:
                     default=self.default_timeout_seconds,
                 )
             ),
-            permission_mode=first_set(override.permission_mode, default.permission_mode),
+            permission_mode=first_set(
+                override.permission_mode, default.permission_mode
+            ),
             session_id=first_set(override.session_id, default.session_id),
             continue_last_session=first_set_or(
-                override.continue_last_session, default.continue_last_session, default=False
+                override.continue_last_session,
+                default.continue_last_session,
+                default=False,
             ),
             fork_session=first_set_or(
                 override.fork_session, default.fork_session, default=False
