@@ -336,12 +336,15 @@ except NetworkUnavailableError as exc:
 
 The exception preserves the command metadata, return code, stdout, stderr, and
 parsed payload. The client classifies strong DNS and routing diagnostics from
-process stderr, provider-declared error records, and guarded stdout error lines
-(`API Error:` for Claude and `Error:` for Grok). Claude's declared `Unable to
-connect to API` and `Connection closed mid-response` errors are also recognized.
-Ordinary model output, prompts, and diffs are not inspected. Rate limits retain
-precedence across those diagnostic channels; retry and scheduling policy belongs
-to the caller.
+provider-declared error records and guarded process diagnostics. Claude and Grok
+inspect process stderr plus guarded stdout error lines (`API Error:` for Claude
+and `Error:` for Grok). Codex inspects JSONL errors and JSON-mode stderr; because
+text- and structured-mode stderr also carries progress, only `ERROR:`-prefixed
+lines are inspected in those modes. Claude's declared `Unable to connect to API`
+and `Connection closed mid-response` errors are also recognized. Ordinary model
+output, prompts, and diffs are not inspected. Rate limits retain precedence
+across those diagnostic channels; retry and scheduling policy belongs to the
+caller.
 
 ## Public Surface
 

@@ -305,6 +305,52 @@ def test_codex_run_text_puts_resume_extra_args_after_resume(
     assert argv[-1] == "-"
 
 
+def test_codex_text_mode_ignores_network_prose_in_progress_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stderr = "\n".join(
+        [
+            "codex",
+            "The documentation says network is unreachable.",
+            "ERROR: permission denied",
+        ]
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=stderr)
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexProcessError) as excinfo:
+        CodexClient().run_text("quote the documentation")
+
+    assert type(excinfo.value) is CodexProcessError
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+    assert excinfo.value.stderr == stderr
+
+
+def test_codex_text_mode_trusts_prefixed_stderr_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    july_31_dns_diagnostic: str,
+) -> None:
+    stderr = "\n".join(
+        [
+            "codex",
+            "partial progress",
+            f"ERROR: {july_31_dns_diagnostic}",
+            "ERROR: stream disconnected",
+        ]
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=stderr)
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexNetworkUnavailableError) as excinfo:
+        CodexClient().run_text("hello")
+
+    assert excinfo.value.stderr == stderr
+
+
 def test_codex_run_json_parses_jsonl_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     stdout = "\n".join(
         [
@@ -652,6 +698,37 @@ def test_codex_run_structured_passes_schema_file_and_validates_output(
     assert recorder.schema_texts == [schema.cli_json + "\n"]
     assert recorder.schema_paths
     assert not Path(recorder.schema_paths[0]).exists()
+
+
+def test_codex_structured_mode_ignores_network_prose_in_progress_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stderr = "\n".join(
+        [
+            "codex",
+            "The documentation says network is unreachable.",
+            "ERROR: permission denied",
+        ]
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=stderr)
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+            "additionalProperties": False,
+        }
+    )
+
+    with pytest.raises(CodexProcessError) as excinfo:
+        CodexClient().run_structured("quote the documentation", schema=schema)
+
+    assert type(excinfo.value) is CodexProcessError
+    assert not isinstance(excinfo.value, NetworkUnavailableError)
+    assert excinfo.value.stderr == stderr
 
 
 def test_codex_run_structured_rejects_non_object_schema(

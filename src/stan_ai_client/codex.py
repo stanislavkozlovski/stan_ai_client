@@ -145,6 +145,7 @@ class CodexClient:
                 stdout=stdout,
                 stderr=stderr,
                 payload=None,
+                human_output=True,
             )
 
         result = TextRunResult(
@@ -194,6 +195,7 @@ class CodexClient:
                 stdout=stdout,
                 stderr=stderr,
                 payload=payload,
+                human_output=False,
             )
 
         if payload is None:
@@ -213,6 +215,7 @@ class CodexClient:
                 stdout=stdout,
                 stderr=stderr,
                 payload=payload,
+                human_output=False,
             )
 
         result = CodexJsonRunResult(
@@ -292,6 +295,7 @@ class CodexClient:
                 stdout=stdout,
                 stderr=stderr,
                 payload=None,
+                human_output=True,
             )
 
         if not stdout.strip():
@@ -516,9 +520,14 @@ class CodexClient:
         stdout: str,
         stderr: str,
         payload: CodexJsonPayload | None,
+        human_output: bool,
     ) -> CodexProcessError:
         error_text = summarize_codex_error_text(payload=payload, stdout=stdout, stderr=stderr)
-        trusted_texts = codex_trusted_error_texts(payload=payload, stderr=stderr)
+        trusted_texts = codex_trusted_error_texts(
+            payload=payload,
+            stderr=stderr,
+            human_output=human_output,
+        )
         rate_limit_text = next(
             (text for text in (error_text, *trusted_texts) if is_rate_limit_text(text)),
             None,

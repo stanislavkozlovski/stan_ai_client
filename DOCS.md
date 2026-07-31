@@ -616,13 +616,16 @@ All four types preserve `command`, `returncode`, `stdout`, `stderr`, and
 `payload`. Classification recognizes strong diagnostics such as DNS lookup or
 temporary name-resolution failure, network unreachable, and no route to host.
 Claude also recognizes its own `Unable to connect to API` and `Connection
-closed mid-response` failures. Classification examines process stderr,
-provider-declared error payloads or events, Claude `API Error:` stdout lines,
-and Grok `Error:` stdout lines; ordinary transcripts, prompts, documentation,
-diffs, and successful output are not searched. Rate-limit evidence on any of
-those diagnostic channels retains precedence. A bare stream disconnect remains
-the provider's ordinary process error. The library does not sleep, retry, or
-impose scheduling policy for this condition.
+closed mid-response` failures. Classification examines provider-declared error
+payloads or events and guarded process diagnostics. Claude and Grok inspect
+process stderr plus Claude `API Error:` and Grok `Error:` stdout lines. Codex
+inspects JSONL errors and JSON-mode stderr; because text- and structured-mode
+stderr also carries progress, only `ERROR:`-prefixed lines are inspected in
+those modes. Ordinary transcripts, prompts, documentation, diffs, and
+successful output are not searched. Rate-limit evidence on any of those
+diagnostic channels retains precedence. A bare stream disconnect remains the
+provider's ordinary process error. The library does not sleep, retry, or impose
+scheduling policy for this condition.
 
 ## Rate Limits
 

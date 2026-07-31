@@ -121,7 +121,7 @@ By default, Codex runs with `--dangerously-bypass-approvals-and-sandbox`. Set
 - `src/stan_ai_client/exceptions.py`: provider-neutral and provider-specific
   exception hierarchy
 - `src/stan_ai_client/_network.py`: provider-aware transport-connectivity
-  detection over provider-declared error records and process stderr
+  detection over provider-declared error records and guarded process diagnostics
 - `src/stan_ai_client/rate_limits.py`: rate-limit parsing helpers
 
 ## Logging

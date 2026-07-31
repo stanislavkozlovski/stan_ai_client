@@ -67,10 +67,16 @@ def codex_trusted_error_texts(
     *,
     payload: CodexJsonPayload | None,
     stderr: str,
+    human_output: bool,
 ) -> tuple[str, ...]:
+    """Human output multiplexes progress and model content onto stderr, so only
+    its explicit error records are trusted there. JSONL stderr is diagnostic."""
     texts: list[str] = []
     if stderr.strip():
-        texts.append(stderr)
+        if human_output:
+            texts.extend(_prefixed_error_lines(stderr, prefix="error:"))
+        else:
+            texts.append(stderr)
     if payload is None:
         return tuple(texts)
     if payload.error is not None:
