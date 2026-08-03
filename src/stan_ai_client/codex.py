@@ -71,6 +71,26 @@ UNSUPPORTED_CODEX_SCHEMA_KEYWORDS = (
     "else",
     "uniqueItems",
 )
+# Every Draft 2020-12 schema-bearing keyword is either rejected above or
+# traversed here. Keeping the locations explicit avoids treating annotation
+# objects such as ``default`` and ``examples`` as schemas.
+_SCHEMA_MAPPING_KEYWORDS = (
+    "$defs",
+    "definitions",
+    "properties",
+    "patternProperties",
+)
+_SCHEMA_VALUE_KEYWORDS = (
+    "additionalProperties",
+    "anyOf",
+    "contains",
+    "contentSchema",
+    "items",
+    "prefixItems",
+    "propertyNames",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+)
 TRun = TypeVar("TRun")
 TStructured = TypeVar("TStructured")
 
@@ -848,32 +868,17 @@ def _iter_codex_output_schema_errors(
         if node.get("additionalProperties") is not False:
             errors.append(f"{path}.additionalProperties must be false")
 
-    errors.extend(_iter_schema_mapping_errors(node.get("properties"), f"{path}.properties"))
-    errors.extend(_iter_schema_mapping_errors(node.get("$defs"), f"{path}.$defs"))
-    errors.extend(_iter_schema_mapping_errors(node.get("definitions"), f"{path}.definitions"))
+    for keyword in _SCHEMA_MAPPING_KEYWORDS:
+        errors.extend(
+            _iter_schema_mapping_errors(node.get(keyword), f"{path}.{keyword}")
+        )
 
-    items = node.get("items")
-    if isinstance(items, dict):
-        errors.extend(_iter_codex_output_schema_errors(items, path=f"{path}.items"))
-    elif isinstance(items, list):
-        for index, item in enumerate(items):
-            errors.extend(
-                _iter_codex_output_schema_errors(item, path=f"{path}.items[{index}]")
-            )
+    for keyword in _SCHEMA_VALUE_KEYWORDS:
+        errors.extend(_iter_schema_value_errors(node.get(keyword), f"{path}.{keyword}"))
 
     for keyword in UNSUPPORTED_CODEX_SCHEMA_KEYWORDS:
         if keyword in node:
             errors.append(f"{path}.{keyword} is not supported")
-
-    value = node.get("anyOf")
-    if isinstance(value, list):
-        for index, item in enumerate(value):
-            errors.extend(
-                _iter_codex_output_schema_errors(
-                    item,
-                    path=f"{path}.anyOf[{index}]",
-                )
-            )
 
     return errors
 
@@ -885,4 +890,18 @@ def _iter_schema_mapping_errors(value: object, path: str) -> list[str]:
     errors: list[str] = []
     for key, child in value.items():
         errors.extend(_iter_codex_output_schema_errors(child, path=f"{path}.{key}"))
+    return errors
+
+
+def _iter_schema_value_errors(value: object, path: str) -> list[str]:
+    if isinstance(value, dict):
+        return _iter_codex_output_schema_errors(value, path=path)
+    if not isinstance(value, list):
+        return []
+
+    errors: list[str] = []
+    for index, child in enumerate(value):
+        errors.extend(
+            _iter_codex_output_schema_errors(child, path=f"{path}[{index}]")
+        )
     return errors

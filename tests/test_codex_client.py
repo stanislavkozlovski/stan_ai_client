@@ -964,17 +964,51 @@ def test_codex_run_structured_rejects_unsupported_schema_subset(
     assert recorder.calls == []
 
 
-def test_validate_codex_output_schema_reports_nested_unique_items_path() -> None:
-    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
-        {
-            "type": "object",
-            "properties": {
-                "evidence_ids": {
+@pytest.mark.parametrize(
+    ("array_schema", "expected_path"),
+    [
+        (
+            {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": True,
+            },
+            "$.properties.evidence_ids.uniqueItems",
+        ),
+        (
+            {
+                "type": "array",
+                "contains": {
                     "type": "array",
                     "items": {"type": "string"},
                     "uniqueItems": True,
-                }
+                },
             },
+            "$.properties.evidence_ids.contains.uniqueItems",
+        ),
+        (
+            {
+                "type": "array",
+                "prefixItems": [
+                    {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "uniqueItems": True,
+                    }
+                ],
+            },
+            "$.properties.evidence_ids.prefixItems[0].uniqueItems",
+        ),
+    ],
+)
+def test_validate_codex_output_schema_reports_nested_unique_items_path(
+    array_schema: dict[str, object],
+    expected_path: str,
+) -> None:
+    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"evidence_ids": array_schema},
             "required": ["evidence_ids"],
             "additionalProperties": False,
         }
@@ -982,7 +1016,7 @@ def test_validate_codex_output_schema_reports_nested_unique_items_path() -> None
     with pytest.raises(CodexSchemaValidationError) as excinfo:
         validate_codex_output_schema(schema)
 
-    assert "$.properties.evidence_ids.uniqueItems is not supported" in str(excinfo.value)
+    assert f"{expected_path} is not supported" in str(excinfo.value)
 
 
 def test_codex_structured_mode_surfaces_provider_error_from_stderr_tail(
