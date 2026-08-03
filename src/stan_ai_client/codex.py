@@ -5,6 +5,7 @@ import logging
 import os
 import tempfile
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
@@ -72,8 +73,10 @@ UNSUPPORTED_CODEX_SCHEMA_KEYWORDS = (
     "uniqueItems",
 )
 # Every Draft 2020-12 schema-bearing keyword is either rejected above or
-# traversed here. Keeping the locations explicit avoids treating annotation
-# objects such as ``default`` and ``examples`` as schemas.
+# enumerated by ``_iter_child_schemas``. Keeping the locations explicit avoids
+# treating annotation objects such as ``default`` and ``examples`` as schemas.
+# Mapping keywords hold ``{name: schema}``; value keywords hold one schema or a
+# list of schemas.
 _SCHEMA_MAPPING_KEYWORDS = (
     "$defs",
     "definitions",
@@ -548,17 +551,25 @@ class CodexClient:
             stderr=stderr,
             human_output=human_output,
         )
-        summary_stderr = (
-            trusted_texts[0] if human_output and trusted_texts else stderr
-        )
-        error_text = summarize_codex_error_text(
-            payload=payload,
-            stdout=stdout,
-            stderr=summary_stderr,
-        )
-        rate_limit_texts = (
-            trusted_texts if human_output else (error_text, *trusted_texts)
-        )
+        if human_output:
+            # Human stderr multiplexes the banner, echoed prompt, progress, and
+            # model prose, so only explicit error records may name the failure or
+            # authorize a retry. The first record is the causal one.
+            error_text = summarize_codex_error_text(
+                payload=payload,
+                stdout=stdout,
+                stderr=trusted_texts[0] if trusted_texts else stderr,
+            )
+            rate_limit_texts = trusted_texts
+        else:
+            error_text = summarize_codex_error_text(
+                payload=payload,
+                stdout=stdout,
+                stderr=stderr,
+            )
+            # JSONL stdout is not part of the trusted texts, so the summary is
+            # the only rate-limit candidate for a failure reported there alone.
+            rate_limit_texts = (error_text, *trusted_texts)
         rate_limit_text = next(
             (text for text in rate_limit_texts if is_rate_limit_text(text)),
             None,
@@ -868,13 +879,8 @@ def _iter_codex_output_schema_errors(
         if node.get("additionalProperties") is not False:
             errors.append(f"{path}.additionalProperties must be false")
 
-    for keyword in _SCHEMA_MAPPING_KEYWORDS:
-        errors.extend(
-            _iter_schema_mapping_errors(node.get(keyword), f"{path}.{keyword}")
-        )
-
-    for keyword in _SCHEMA_VALUE_KEYWORDS:
-        errors.extend(_iter_schema_value_errors(node.get(keyword), f"{path}.{keyword}"))
+    for suffix, child in _iter_child_schemas(node):
+        errors.extend(_iter_codex_output_schema_errors(child, path=f"{path}.{suffix}"))
 
     for keyword in UNSUPPORTED_CODEX_SCHEMA_KEYWORDS:
         if keyword in node:
@@ -883,25 +889,23 @@ def _iter_codex_output_schema_errors(
     return errors
 
 
-def _iter_schema_mapping_errors(value: object, path: str) -> list[str]:
-    if not isinstance(value, dict):
-        return []
+def _iter_child_schemas(node: Mapping[str, Any]) -> Iterator[tuple[str, object]]:
+    """Yield every schema-bearing child of ``node`` with its JSON path suffix.
 
-    errors: list[str] = []
-    for key, child in value.items():
-        errors.extend(_iter_codex_output_schema_errors(child, path=f"{path}.{key}"))
-    return errors
+    Recursion passes through this one boundary, so a schema-bearing keyword is
+    either rejected by ``UNSUPPORTED_CODEX_SCHEMA_KEYWORDS`` or enumerated here;
+    it cannot silently hide a nested unsupported keyword.
+    """
+    for keyword in _SCHEMA_MAPPING_KEYWORDS:
+        value = node.get(keyword)
+        if isinstance(value, dict):
+            for key, child in value.items():
+                yield f"{keyword}.{key}", child
 
-
-def _iter_schema_value_errors(value: object, path: str) -> list[str]:
-    if isinstance(value, dict):
-        return _iter_codex_output_schema_errors(value, path=path)
-    if not isinstance(value, list):
-        return []
-
-    errors: list[str] = []
-    for index, child in enumerate(value):
-        errors.extend(
-            _iter_codex_output_schema_errors(child, path=f"{path}[{index}]")
-        )
-    return errors
+    for keyword in _SCHEMA_VALUE_KEYWORDS:
+        value = node.get(keyword)
+        if isinstance(value, dict):
+            yield keyword, value
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                yield f"{keyword}[{index}]", child

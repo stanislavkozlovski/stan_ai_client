@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from jsonschema.validators import Draft202012Validator
 
 from stan_ai_client import (
     AIClientTimeoutError,
@@ -29,7 +30,39 @@ from stan_ai_client import (
     StructuredSchema,
     validate_codex_output_schema,
 )
+from stan_ai_client.codex import (
+    UNSUPPORTED_CODEX_SCHEMA_KEYWORDS,
+    _SCHEMA_MAPPING_KEYWORDS,
+    _SCHEMA_VALUE_KEYWORDS,
+)
 from stan_ai_client.codex_parser import CODEX_ERROR_EVENT_TYPES
+
+# Draft 2020-12 keywords that constrain a value directly instead of holding a
+# subschema. Every other keyword the validator knows must be rejected or
+# enumerated by the preflight, or a nested unsupported keyword can hide below it.
+NON_SCHEMA_BEARING_SCHEMA_KEYWORDS = frozenset(
+    {
+        "$dynamicRef",
+        "$ref",
+        "const",
+        "enum",
+        "exclusiveMaximum",
+        "exclusiveMinimum",
+        "format",
+        "maxItems",
+        "maxLength",
+        "maxProperties",
+        "maximum",
+        "minItems",
+        "minLength",
+        "minProperties",
+        "minimum",
+        "multipleOf",
+        "pattern",
+        "required",
+        "type",
+    }
+)
 
 
 class RunRecorder:
@@ -1017,6 +1050,17 @@ def test_validate_codex_output_schema_reports_nested_unique_items_path(
         validate_codex_output_schema(schema)
 
     assert f"{expected_path} is not supported" in str(excinfo.value)
+
+
+def test_codex_schema_preflight_handles_every_draft_2020_12_keyword() -> None:
+    handled = (
+        set(UNSUPPORTED_CODEX_SCHEMA_KEYWORDS)
+        | set(_SCHEMA_MAPPING_KEYWORDS)
+        | set(_SCHEMA_VALUE_KEYWORDS)
+        | NON_SCHEMA_BEARING_SCHEMA_KEYWORDS
+    )
+
+    assert set(Draft202012Validator.VALIDATORS) - handled == set()
 
 
 def test_codex_structured_mode_surfaces_provider_error_from_stderr_tail(
