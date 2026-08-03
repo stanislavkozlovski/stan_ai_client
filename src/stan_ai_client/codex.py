@@ -69,6 +69,7 @@ UNSUPPORTED_CODEX_SCHEMA_KEYWORDS = (
     "if",
     "then",
     "else",
+    "uniqueItems",
 )
 TRun = TypeVar("TRun")
 TStructured = TypeVar("TStructured")
@@ -711,7 +712,7 @@ class CodexClient:
         )
 
     def _write_schema_file(self, schema: StructuredSchema[Any]) -> str:
-        _validate_codex_output_schema(schema)
+        validate_codex_output_schema(schema)
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
@@ -767,7 +768,14 @@ def _resume_session_arg_index(argv: tuple[str, ...]) -> int | None:
     return session_index
 
 
-def _validate_codex_output_schema(schema: StructuredSchema[Any]) -> None:
+def validate_codex_output_schema(schema: StructuredSchema[Any]) -> None:
+    """Check ``schema`` against the Codex/OpenAI structured-output subset.
+
+    Raises :class:`CodexSchemaValidationError` listing every violation with its
+    JSON path. Runs no subprocess and makes no network request, so callers can
+    validate schemas at startup or in CI. ``CodexClient.run_structured`` applies
+    the same check before invoking Codex.
+    """
     errors = list(
         _iter_codex_output_schema_errors(
             schema.schema,

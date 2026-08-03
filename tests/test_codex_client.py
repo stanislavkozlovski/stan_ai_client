@@ -27,6 +27,7 @@ from stan_ai_client import (
     NetworkUnavailableError,
     RateLimitRetryPolicy,
     StructuredSchema,
+    validate_codex_output_schema,
 )
 from stan_ai_client.codex_parser import CODEX_ERROR_EVENT_TYPES
 
@@ -898,6 +899,168 @@ def test_codex_run_structured_rejects_unsupported_schema_subset(
         client.run_structured("hello", schema=StructuredSchema.from_dict(schema_dict))
 
     assert recorder.calls == []
+
+
+def test_codex_run_structured_rejects_nested_unique_items_before_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="{}", stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "evidence_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "uniqueItems": True,
+                }
+            },
+            "required": ["evidence_ids"],
+            "additionalProperties": False,
+        }
+    )
+    with pytest.raises(CodexSchemaValidationError) as excinfo:
+        CodexClient().run_structured("generate the Delta Growth report", schema=schema)
+
+    assert "$.properties.evidence_ids.uniqueItems is not supported" in str(excinfo.value)
+    assert recorder.calls == []
+
+
+def test_codex_run_structured_rejects_unique_items_at_any_depth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="{}", stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "sections": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "evidence_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "uniqueItems": True,
+                            }
+                        },
+                        "required": ["evidence_ids"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["sections"],
+            "additionalProperties": False,
+        }
+    )
+    with pytest.raises(CodexSchemaValidationError) as excinfo:
+        CodexClient().run_structured("hello", schema=schema)
+
+    assert (
+        "$.properties.sections.items.properties.evidence_ids.uniqueItems is not supported"
+        in str(excinfo.value)
+    )
+    assert recorder.calls == []
+
+
+def test_validate_codex_output_schema_is_a_local_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="{}", stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    bad_schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "evidence_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "uniqueItems": True,
+                }
+            },
+            "required": ["evidence_ids"],
+            "additionalProperties": False,
+        }
+    )
+    with pytest.raises(CodexSchemaValidationError) as excinfo:
+        validate_codex_output_schema(bad_schema)
+
+    assert "$.properties.evidence_ids.uniqueItems is not supported" in str(excinfo.value)
+
+    good_schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+            "additionalProperties": False,
+        }
+    )
+    validate_codex_output_schema(good_schema)
+
+    assert recorder.calls == []
+
+
+def test_codex_structured_mode_surfaces_provider_error_from_stderr_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prompt = "Generate the weekly Delta Growth report with evidence identifiers."
+    provider_error = (
+        "ERROR: unexpected status 400 Bad Request: "
+        '{"error":{"message":"Invalid schema for response_format \'output\': '
+        "In context=('properties', 'evidence_ids'), 'uniqueItems' is not permitted.\","
+        '"type":"invalid_request_error","param":"text.format.schema",'
+        '"code":"invalid_json_schema"}}'
+    )
+    stderr = "\n".join(
+        [
+            ">_ You are using OpenAI Codex in ~/uzealot",
+            "",
+            "model: gpt-5.6-sol",
+            "--------",
+            "user",
+            prompt,
+            "",
+            "thinking",
+            *(f"progress line {index} while the model works" for index in range(30)),
+            provider_error,
+        ]
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=stderr)
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+            "additionalProperties": False,
+        }
+    )
+    with pytest.raises(CodexProcessError) as excinfo:
+        CodexClient().run_structured(prompt, schema=schema)
+
+    message = str(excinfo.value)
+    assert type(excinfo.value) is CodexProcessError
+    assert "invalid_json_schema" in message
+    assert "uniqueItems" in message
+    assert prompt not in message
+    assert excinfo.value.stderr == stderr
+    assert excinfo.value.stdout == ""
+
 
 @pytest.mark.parametrize(
     "options, expected_resume_arg",
