@@ -957,6 +957,20 @@ def test_codex_run_structured_rejects_non_object_schema(
             {
                 "type": "object",
                 "properties": {
+                    "summary": {
+                        "type": "string",
+                        "contentSchema": {"type": "string"},
+                    }
+                },
+                "required": ["summary"],
+                "additionalProperties": False,
+            },
+            "contentSchema",
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {
                     "sections": {
                         "type": "array",
                         "items": {
@@ -1056,6 +1070,7 @@ def test_validate_codex_output_schema_reports_nested_unique_items_path(
     ("schema_type", "keyword", "value"),
     [
         ("array", "contains", {"type": "string"}),
+        ("string", "contentSchema", {"type": "string"}),
         ("array", "prefixItems", [{"type": "string"}]),
         ("object", "patternProperties", {"^x": {"type": "string"}}),
         ("object", "propertyNames", {"pattern": "^x"}),
@@ -1071,7 +1086,7 @@ def test_validate_codex_output_schema_rejects_unsupported_schema_containers(
     child_schema: dict[str, object] = {"type": schema_type, keyword: value}
     if schema_type == "array":
         child_schema["items"] = {"type": "string"}
-    else:
+    elif schema_type == "object":
         child_schema.update(
             properties={},
             required=[],
@@ -1091,6 +1106,41 @@ def test_validate_codex_output_schema_rejects_unsupported_schema_containers(
         validate_codex_output_schema(schema)
 
     assert f"$.properties.value.{keyword} is not supported" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("mapping_keyword", "mapping_key", "expected_path"),
+    [
+        ("properties", "a.b", '$.properties["a.b"].uniqueItems'),
+        ("$defs", "items[0]", '$.$defs["items[0]"].uniqueItems'),
+    ],
+)
+def test_validate_codex_output_schema_escapes_mapping_keys_in_paths(
+    mapping_keyword: str,
+    mapping_key: str,
+    expected_path: str,
+) -> None:
+    child_schema: dict[str, object] = {
+        "type": "array",
+        "items": {"type": "string"},
+        "uniqueItems": True,
+    }
+    schema_dict: dict[str, object] = {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+        mapping_keyword: {mapping_key: child_schema},
+    }
+    if mapping_keyword == "properties":
+        schema_dict["required"] = [mapping_key]
+
+    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(schema_dict)
+
+    with pytest.raises(CodexSchemaValidationError) as excinfo:
+        validate_codex_output_schema(schema)
+
+    assert expected_path in str(excinfo.value)
 
 
 def test_codex_schema_preflight_handles_every_draft_2020_12_keyword() -> None:

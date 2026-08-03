@@ -72,6 +72,7 @@ UNSUPPORTED_CODEX_SCHEMA_KEYWORDS = (
     "else",
     "uniqueItems",
     "contains",
+    "contentSchema",
     "prefixItems",
     "patternProperties",
     "propertyNames",
@@ -906,7 +907,11 @@ def _iter_child_schemas(node: Mapping[str, Any]) -> Iterator[tuple[str, object]]
         value = node.get(keyword)
         if isinstance(value, dict):
             for key, child in value.items():
-                yield f"{keyword}.{key}", child
+                if isinstance(key, str) and key.isidentifier():
+                    suffix = f"{keyword}.{key}"
+                else:
+                    suffix = f"{keyword}[{json.dumps(key, ensure_ascii=False)}]"
+                yield suffix, child
 
     for keyword in _SCHEMA_VALUE_KEYWORDS:
         value = node.get(keyword)
