@@ -466,10 +466,10 @@ subset before the temporary file is created. The root schema must be an object,
 object properties must all be listed in `required`, and objects must set
 `additionalProperties: false`. Unsupported schema keywords such as `allOf`,
 `oneOf`, `not`, `dependentRequired`, `dependentSchemas`, `if`, `then`, `else`,
-and `uniqueItems`, plus unsupported schema containers such as `contains`,
-`contentSchema`, `prefixItems`, `patternProperties`, `propertyNames`,
-`unevaluatedItems`, and `unevaluatedProperties`, are rejected locally with the
-offending JSON path.
+and `uniqueItems`, plus unsupported reference, content, and schema-container
+keywords such as `$dynamicRef`, `contentEncoding`, `contentSchema`, `contains`,
+`prefixItems`, `patternProperties`, `propertyNames`, `unevaluatedItems`, and
+`unevaluatedProperties`, are rejected locally with the offending JSON path.
 
 The same check is exported as `validate_codex_output_schema(schema)`. It runs
 no subprocess and makes no network request, so callers can validate schemas at

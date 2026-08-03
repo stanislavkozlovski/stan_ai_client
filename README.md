@@ -221,9 +221,10 @@ subset before invoking the CLI. The root schema must be an object, every object
 property must be required, and objects must set `additionalProperties: false`.
 Unsupported schema keywords such as `allOf`, `oneOf`, `not`,
 `dependentRequired`, `dependentSchemas`, `if`, `then`, `else`, and
-`uniqueItems`, plus unsupported schema containers such as `contains`,
-`contentSchema`, `prefixItems`, `patternProperties`, `propertyNames`,
-`unevaluatedItems`, and `unevaluatedProperties`, are rejected locally. Call
+`uniqueItems`, plus unsupported reference, content, and schema-container
+keywords such as `$dynamicRef`, `contentEncoding`, `contentSchema`, `contains`,
+`prefixItems`, `patternProperties`, `propertyNames`, `unevaluatedItems`, and
+`unevaluatedProperties`, are rejected locally. Call
 `validate_codex_output_schema(schema)` to run the same check yourself (at
 startup or in CI) without invoking Codex.
 Structured Codex runs may also resume existing sessions with `session_id` or

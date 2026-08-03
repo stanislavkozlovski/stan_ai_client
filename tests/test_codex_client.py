@@ -37,30 +37,67 @@ from stan_ai_client.codex import (
 )
 from stan_ai_client.codex_parser import CODEX_ERROR_EVENT_TYPES
 
-# Draft 2020-12 keywords that constrain a value directly instead of holding a
-# subschema. Every other keyword the validator knows must be rejected or
+# Draft 2020-12 vocabulary keywords without their own jsonschema validator.
+# Keeping this inventory explicit prevents validator dispatch from being
+# mistaken for the complete vocabulary.
+DRAFT_2020_12_KEYWORDS_WITHOUT_VALIDATORS = frozenset(
+    {
+        "$anchor",
+        "$comment",
+        "$defs",
+        "$dynamicAnchor",
+        "$id",
+        "$schema",
+        "$vocabulary",
+        "contentEncoding",
+        "contentMediaType",
+        "contentSchema",
+        "default",
+        "deprecated",
+        "description",
+        "else",
+        "examples",
+        "maxContains",
+        "minContains",
+        "readOnly",
+        "then",
+        "title",
+        "writeOnly",
+    }
+)
+
+# Keywords that constrain a value directly or annotate a schema instead of
+# holding a subschema. Every other vocabulary keyword must be rejected or
 # enumerated by the preflight, or a nested unsupported keyword can hide below it.
 NON_SCHEMA_BEARING_SCHEMA_KEYWORDS = frozenset(
     {
-        "$dynamicRef",
+        "$comment",
+        "$id",
         "$ref",
+        "$schema",
+        "$vocabulary",
         "const",
+        "default",
+        "deprecated",
+        "description",
         "enum",
+        "examples",
         "exclusiveMaximum",
         "exclusiveMinimum",
         "format",
         "maxItems",
         "maxLength",
-        "maxProperties",
         "maximum",
         "minItems",
         "minLength",
-        "minProperties",
         "minimum",
         "multipleOf",
         "pattern",
+        "readOnly",
         "required",
+        "title",
         "type",
+        "writeOnly",
     }
 )
 
@@ -971,6 +1008,20 @@ def test_codex_run_structured_rejects_non_object_schema(
             {
                 "type": "object",
                 "properties": {
+                    "summary": {
+                        "type": "string",
+                        "contentEncoding": "base64",
+                    }
+                },
+                "required": ["summary"],
+                "additionalProperties": False,
+            },
+            "contentEncoding",
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {
                     "sections": {
                         "type": "array",
                         "items": {
@@ -1069,8 +1120,20 @@ def test_validate_codex_output_schema_reports_nested_unique_items_path(
 @pytest.mark.parametrize(
     ("schema_type", "keyword", "value"),
     [
+        ("string", "$anchor", "value"),
+        ("string", "$dynamicAnchor", "value"),
+        ("string", "$dynamicRef", "#value"),
+        ("string", "$recursiveAnchor", "value"),
+        ("string", "$recursiveRef", "#"),
         ("array", "contains", {"type": "string"}),
+        ("array", "maxContains", 2),
+        ("array", "minContains", 1),
+        ("string", "contentEncoding", "base64"),
+        ("string", "contentMediaType", "application/json"),
         ("string", "contentSchema", {"type": "string"}),
+        ("object", "dependencies", {"value": ["other"]}),
+        ("object", "maxProperties", 2),
+        ("object", "minProperties", 1),
         ("array", "prefixItems", [{"type": "string"}]),
         ("object", "patternProperties", {"^x": {"type": "string"}}),
         ("object", "propertyNames", {"pattern": "^x"}),
@@ -1078,7 +1141,7 @@ def test_validate_codex_output_schema_reports_nested_unique_items_path(
         ("object", "unevaluatedProperties", False),
     ],
 )
-def test_validate_codex_output_schema_rejects_unsupported_schema_containers(
+def test_validate_codex_output_schema_rejects_unsupported_schema_keywords(
     schema_type: str,
     keyword: str,
     value: object,
@@ -1144,6 +1207,10 @@ def test_validate_codex_output_schema_escapes_mapping_keys_in_paths(
 
 
 def test_codex_schema_preflight_handles_every_draft_2020_12_keyword() -> None:
+    draft_2020_12_keywords = (
+        set(Draft202012Validator.VALIDATORS)
+        | DRAFT_2020_12_KEYWORDS_WITHOUT_VALIDATORS
+    )
     handled = (
         set(UNSUPPORTED_CODEX_SCHEMA_KEYWORDS)
         | set(_SCHEMA_MAPPING_KEYWORDS)
@@ -1151,7 +1218,7 @@ def test_codex_schema_preflight_handles_every_draft_2020_12_keyword() -> None:
         | NON_SCHEMA_BEARING_SCHEMA_KEYWORDS
     )
 
-    assert set(Draft202012Validator.VALIDATORS) - handled == set()
+    assert draft_2020_12_keywords - handled == set()
 
 
 def test_codex_structured_mode_surfaces_provider_error_from_stderr_tail(
