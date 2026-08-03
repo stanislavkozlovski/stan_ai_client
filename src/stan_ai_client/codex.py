@@ -529,15 +529,18 @@ class CodexClient:
             human_output=human_output,
         )
         summary_stderr = (
-            trusted_texts[-1] if human_output and trusted_texts else stderr
+            trusted_texts[0] if human_output and trusted_texts else stderr
         )
         error_text = summarize_codex_error_text(
             payload=payload,
             stdout=stdout,
             stderr=summary_stderr,
         )
+        rate_limit_texts = (
+            trusted_texts if human_output else (error_text, *trusted_texts)
+        )
         rate_limit_text = next(
-            (text for text in (error_text, *trusted_texts) if is_rate_limit_text(text)),
+            (text for text in rate_limit_texts if is_rate_limit_text(text)),
             None,
         )
         if rate_limit_text is not None:

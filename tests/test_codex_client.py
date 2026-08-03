@@ -330,15 +330,52 @@ def test_codex_text_mode_ignores_network_prose_in_progress_stderr(
     assert excinfo.value.stderr == stderr
 
 
-def test_codex_text_mode_trusts_prefixed_stderr_errors(
+def test_codex_text_mode_does_not_retry_rate_limit_prose(
     monkeypatch: pytest.MonkeyPatch,
-    july_31_dns_diagnostic: str,
 ) -> None:
     stderr = "\n".join(
         [
             "codex",
+            "The documentation says rate limit exceeded, retry after 60.",
+        ]
+    )
+    recorder = RunRecorder(
+        [
+            subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="", stderr=stderr
+            ),
+            subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="done\n", stderr=""
+            ),
+        ]
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+    sleeps: list[float] = []
+    monkeypatch.setattr("stan_ai_client.codex.time.sleep", sleeps.append)
+
+    with pytest.raises(CodexProcessError) as excinfo:
+        CodexClient().run_text(
+            "quote the documentation",
+            rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=120),
+        )
+
+    assert type(excinfo.value) is CodexProcessError
+    assert not isinstance(excinfo.value, CodexRateLimitError)
+    assert excinfo.value.stderr == stderr
+    assert len(recorder.calls) == 1
+    assert sleeps == []
+
+
+def test_codex_text_mode_trusts_prefixed_stderr_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    july_31_dns_diagnostic: str,
+) -> None:
+    causal_error = f"ERROR: {july_31_dns_diagnostic}"
+    stderr = "\n".join(
+        [
+            "codex",
             "partial progress",
-            f"ERROR: {july_31_dns_diagnostic}",
+            causal_error,
             "ERROR: stream disconnected",
         ]
     )
@@ -350,6 +387,7 @@ def test_codex_text_mode_trusts_prefixed_stderr_errors(
     with pytest.raises(CodexNetworkUnavailableError) as excinfo:
         CodexClient().run_text("hello")
 
+    assert str(excinfo.value) == causal_error
     assert excinfo.value.stderr == stderr
 
 
