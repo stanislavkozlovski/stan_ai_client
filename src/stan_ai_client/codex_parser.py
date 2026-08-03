@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Iterator
 from typing import Any
 
@@ -115,22 +114,6 @@ def make_codex_structured_payload(
 
 
 _ERROR_TEXT_LIMIT = 500
-# Codex human-mode stderr starts with a banner and the echoed prompt; the
-# useful failure (an HTTP status, invalid_json_schema, an "ERROR:" line) is
-# usually one of the last lines. These patterns pick that line out so the
-# concise summary is the provider error, not the prompt.
-_HIGH_SIGNAL_STDERR_LINE_RE = re.compile(
-    r"""(?ix)
-    ^\s*(?:error|fatal)\b
-    | \berror\s*:
-    | \binvalid_json_schema\b
-    | \bunexpected\s+status\b
-    | \b(?:http|status(?:\s+code)?)\s*:?\s*[45]\d{2}\b
-    | \b[45]\d{2}\s+(?:bad\s+request|unauthorized|forbidden|not\s+found
-        |too\s+many\s+requests|internal\s+server\s+error|bad\s+gateway
-        |service\s+unavailable|gateway\s+timeout)\b
-    """
-)
 
 
 def summarize_codex_error_text(
@@ -145,19 +128,8 @@ def summarize_codex_error_text(
             return summarized
     stripped_stderr = stderr.strip()
     if stripped_stderr:
-        high_signal = _last_high_signal_stderr_line(stripped_stderr)
-        if high_signal is not None:
-            return high_signal
         return stripped_stderr[-_ERROR_TEXT_LIMIT:]
     return stdout.strip()[:_ERROR_TEXT_LIMIT]
-
-
-def _last_high_signal_stderr_line(stderr: str) -> str | None:
-    for line in reversed(stderr.splitlines()):
-        candidate = line.strip()
-        if candidate and _HIGH_SIGNAL_STDERR_LINE_RE.search(candidate):
-            return candidate[:_ERROR_TEXT_LIMIT]
-    return None
 
 
 def _summarize_error_event(event: dict[str, Any]) -> str | None:

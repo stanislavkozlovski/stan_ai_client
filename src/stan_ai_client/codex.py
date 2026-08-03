@@ -523,11 +523,18 @@ class CodexClient:
         payload: CodexJsonPayload | None,
         human_output: bool,
     ) -> CodexProcessError:
-        error_text = summarize_codex_error_text(payload=payload, stdout=stdout, stderr=stderr)
         trusted_texts = codex_trusted_error_texts(
             payload=payload,
             stderr=stderr,
             human_output=human_output,
+        )
+        summary_stderr = (
+            trusted_texts[-1] if human_output and trusted_texts else stderr
+        )
+        error_text = summarize_codex_error_text(
+            payload=payload,
+            stdout=stdout,
+            stderr=summary_stderr,
         )
         rate_limit_text = next(
             (text for text in (error_text, *trusted_texts) if is_rate_limit_text(text)),
