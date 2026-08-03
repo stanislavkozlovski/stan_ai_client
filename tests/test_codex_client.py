@@ -1117,6 +1117,122 @@ def test_validate_codex_output_schema_reports_nested_unique_items_path(
     assert f"{expected_path} is not supported" in str(excinfo.value)
 
 
+def test_validate_codex_output_schema_rejects_root_any_of() -> None:
+    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": False,
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(CodexSchemaValidationError) as excinfo:
+        validate_codex_output_schema(schema)
+
+    assert "$.anyOf is not supported at the root" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("child_schema", "expected_path"),
+    [
+        (
+            {"anyOf": [False, {"type": "string"}]},
+            "$.properties.value.anyOf[0]",
+        ),
+        (
+            {"type": "array", "items": False},
+            "$.properties.value.items",
+        ),
+    ],
+)
+def test_validate_codex_output_schema_rejects_boolean_subschemas(
+    child_schema: dict[str, object], expected_path: str
+) -> None:
+    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"value": child_schema},
+            "required": ["value"],
+            "additionalProperties": False,
+        }
+    )
+
+    with pytest.raises(CodexSchemaValidationError) as excinfo:
+        validate_codex_output_schema(schema)
+
+    assert f"{expected_path} boolean schemas are not supported" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("ref", "expected_message"),
+    [
+        (
+            "#/$defs/missing",
+            "$.properties.value.$ref does not resolve to a schema",
+        ),
+        (
+            "https://example.com/schema.json",
+            "$.properties.value.$ref must be a local reference",
+        ),
+        (
+            "#/$defs/disabled",
+            "$.properties.value.$ref resolves to a boolean schema, "
+            "which is not supported",
+        ),
+    ],
+)
+def test_validate_codex_output_schema_rejects_invalid_refs(
+    ref: str, expected_message: str
+) -> None:
+    definitions: dict[str, object] = {}
+    if ref == "#/$defs/disabled":
+        definitions["disabled"] = False
+    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"value": {"$ref": ref}},
+            "required": ["value"],
+            "additionalProperties": False,
+            "$defs": definitions,
+        }
+    )
+
+    with pytest.raises(CodexSchemaValidationError) as excinfo:
+        validate_codex_output_schema(schema)
+
+    assert expected_message in str(excinfo.value)
+
+
+def test_validate_codex_output_schema_accepts_resolvable_local_refs() -> None:
+    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "value": {"$ref": "#/$defs/value"},
+                "escaped": {"$ref": "#/$defs/a~1b~0c"},
+                "recursive": {"$ref": "#"},
+            },
+            "required": ["value", "escaped", "recursive"],
+            "additionalProperties": False,
+            "$defs": {
+                "value": {"type": "string"},
+                "a/b~c": {"type": "integer"},
+            },
+        }
+    )
+
+    validate_codex_output_schema(schema)
+
+
 @pytest.mark.parametrize(
     ("schema_type", "keyword", "value"),
     [

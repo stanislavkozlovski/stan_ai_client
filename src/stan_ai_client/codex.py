@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 from typing import Any, Callable, Mapping, TypeVar
+from urllib.parse import unquote
 
 from jsonschema.exceptions import ValidationError
 
@@ -840,6 +841,7 @@ def validate_codex_output_schema(schema: StructuredSchema[Any]) -> None:
         _iter_codex_output_schema_errors(
             schema.schema,
             path="$",
+            root_schema=schema.schema,
             require_root_object=True,
         )
     )
@@ -854,8 +856,11 @@ def _iter_codex_output_schema_errors(
     node: object,
     *,
     path: str,
+    root_schema: Mapping[str, Any],
     require_root_object: bool = False,
 ) -> list[str]:
+    if isinstance(node, bool):
+        return [f"{path} boolean schemas are not supported"]
     if not isinstance(node, dict):
         return []
 
@@ -863,6 +868,22 @@ def _iter_codex_output_schema_errors(
     schema_type = node.get("type")
     if require_root_object and schema_type != "object":
         errors.append(f"{path} must be a root object schema")
+    if require_root_object and "anyOf" in node:
+        errors.append(f"{path}.anyOf is not supported at the root")
+
+    ref = node.get("$ref")
+    if ref is not None:
+        ref_path = f"{path}.$ref"
+        if not isinstance(ref, str) or not ref.startswith("#"):
+            errors.append(f"{ref_path} must be a local reference")
+        else:
+            target = _resolve_local_schema_ref(root_schema, ref)
+            if target is None:
+                errors.append(f"{ref_path} does not resolve to a schema")
+            elif isinstance(target, bool):
+                errors.append(
+                    f"{ref_path} resolves to a boolean schema, which is not supported"
+                )
 
     is_object_schema = (
         schema_type == "object"
@@ -899,13 +920,96 @@ def _iter_codex_output_schema_errors(
             errors.append(f"{path}.additionalProperties must be false")
 
     for suffix, child in _iter_child_schemas(node):
-        errors.extend(_iter_codex_output_schema_errors(child, path=f"{path}.{suffix}"))
+        errors.extend(
+            _iter_codex_output_schema_errors(
+                child,
+                path=f"{path}.{suffix}",
+                root_schema=root_schema,
+            )
+        )
 
     for keyword in UNSUPPORTED_CODEX_SCHEMA_KEYWORDS:
         if keyword in node:
             errors.append(f"{path}.{keyword} is not supported")
 
     return errors
+
+
+def _resolve_local_schema_ref(
+    root_schema: Mapping[str, Any], ref: str
+) -> object | None:
+    if ref == "#":
+        return root_schema
+    if not ref.startswith("#/"):
+        return None
+
+    try:
+        pointer = unquote(ref[1:], errors="strict")
+    except UnicodeDecodeError:
+        return None
+
+    parts: list[str] = []
+    for encoded_part in pointer[1:].split("/"):
+        part = _decode_json_pointer_part(encoded_part)
+        if part is None:
+            return None
+        parts.append(part)
+
+    resolved: object = root_schema
+    index = 0
+    while index < len(parts):
+        if not isinstance(resolved, dict):
+            return None
+
+        keyword = parts[index]
+        if keyword in _SCHEMA_MAPPING_KEYWORDS:
+            children = resolved.get(keyword)
+            if not isinstance(children, dict) or index + 1 >= len(parts):
+                return None
+            name = parts[index + 1]
+            if name not in children:
+                return None
+            resolved = children[name]
+            index += 2
+            continue
+
+        if keyword not in _SCHEMA_VALUE_KEYWORDS or keyword not in resolved:
+            return None
+        resolved = resolved[keyword]
+        index += 1
+        if isinstance(resolved, list):
+            if index >= len(parts):
+                return None
+            array_index = parts[index]
+            if not array_index.isdigit() or (
+                len(array_index) > 1 and array_index.startswith("0")
+            ):
+                return None
+            item_index = int(array_index)
+            if item_index >= len(resolved):
+                return None
+            resolved = resolved[item_index]
+            index += 1
+
+    if isinstance(resolved, (bool, dict)):
+        return resolved
+    return None
+
+
+def _decode_json_pointer_part(encoded_part: str) -> str | None:
+    decoded: list[str] = []
+    index = 0
+    while index < len(encoded_part):
+        character = encoded_part[index]
+        if character != "~":
+            decoded.append(character)
+            index += 1
+            continue
+        if index + 1 >= len(encoded_part) or encoded_part[index + 1] not in "01":
+            return None
+        decoded.append("~" if encoded_part[index + 1] == "0" else "/")
+        index += 2
+    return "".join(decoded)
 
 
 def _iter_child_schemas(node: Mapping[str, Any]) -> Iterator[tuple[str, object]]:
@@ -929,6 +1033,9 @@ def _iter_child_schemas(node: Mapping[str, Any]) -> Iterator[tuple[str, object]]
         value = node.get(keyword)
         if isinstance(value, dict):
             yield keyword, value
+        elif isinstance(value, bool):
+            if keyword != "additionalProperties":
+                yield keyword, value
         elif isinstance(value, list):
             for index, child in enumerate(value):
                 yield f"{keyword}[{index}]", child

@@ -219,6 +219,8 @@ validates the returned object locally.
 Codex additionally validates schemas against the OpenAI structured-output
 subset before invoking the CLI. The root schema must be an object, every object
 property must be required, and objects must set `additionalProperties: false`.
+Root-level `anyOf`, boolean subschemas, external references, and unresolved
+local references are also rejected.
 Unsupported schema keywords such as `allOf`, `oneOf`, `not`,
 `dependentRequired`, `dependentSchemas`, `if`, `then`, `else`, and
 `uniqueItems`, plus unsupported reference, content, and schema-container
