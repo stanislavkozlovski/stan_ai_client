@@ -1052,6 +1052,47 @@ def test_validate_codex_output_schema_reports_nested_unique_items_path(
     assert f"{expected_path} is not supported" in str(excinfo.value)
 
 
+@pytest.mark.parametrize(
+    ("schema_type", "keyword", "value"),
+    [
+        ("array", "contains", {"type": "string"}),
+        ("array", "prefixItems", [{"type": "string"}]),
+        ("object", "patternProperties", {"^x": {"type": "string"}}),
+        ("object", "propertyNames", {"pattern": "^x"}),
+        ("array", "unevaluatedItems", False),
+        ("object", "unevaluatedProperties", False),
+    ],
+)
+def test_validate_codex_output_schema_rejects_unsupported_schema_containers(
+    schema_type: str,
+    keyword: str,
+    value: object,
+) -> None:
+    child_schema: dict[str, object] = {"type": schema_type, keyword: value}
+    if schema_type == "array":
+        child_schema["items"] = {"type": "string"}
+    else:
+        child_schema.update(
+            properties={},
+            required=[],
+            additionalProperties=False,
+        )
+
+    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"value": child_schema},
+            "required": ["value"],
+            "additionalProperties": False,
+        }
+    )
+
+    with pytest.raises(CodexSchemaValidationError) as excinfo:
+        validate_codex_output_schema(schema)
+
+    assert f"$.properties.value.{keyword} is not supported" in str(excinfo.value)
+
+
 def test_codex_schema_preflight_handles_every_draft_2020_12_keyword() -> None:
     handled = (
         set(UNSUPPORTED_CODEX_SCHEMA_KEYWORDS)

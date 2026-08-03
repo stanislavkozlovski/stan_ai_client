@@ -71,6 +71,12 @@ UNSUPPORTED_CODEX_SCHEMA_KEYWORDS = (
     "then",
     "else",
     "uniqueItems",
+    "contains",
+    "prefixItems",
+    "patternProperties",
+    "propertyNames",
+    "unevaluatedItems",
+    "unevaluatedProperties",
 )
 # Every Draft 2020-12 schema-bearing keyword is either rejected above or
 # enumerated by ``_iter_child_schemas``. Keeping the locations explicit avoids
