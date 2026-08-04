@@ -16,6 +16,7 @@ from jsonschema.exceptions import ValidationError
 
 from ._options import first_set, first_set_or
 from ._network import (
+    CodexOutputProtocol,
     codex_trusted_error_texts,
     has_network_unavailable_evidence,
 )
@@ -189,7 +190,7 @@ class CodexClient:
                 stdout=stdout,
                 stderr=stderr,
                 payload=None,
-                human_output=True,
+                output_protocol="unstructured",
             )
 
         result = TextRunResult(
@@ -239,7 +240,7 @@ class CodexClient:
                 stdout=stdout,
                 stderr=stderr,
                 payload=payload,
-                human_output=False,
+                output_protocol="jsonl",
             )
 
         if payload is None:
@@ -259,7 +260,7 @@ class CodexClient:
                 stdout=stdout,
                 stderr=stderr,
                 payload=payload,
-                human_output=False,
+                output_protocol="jsonl",
             )
 
         result = CodexJsonRunResult(
@@ -339,7 +340,7 @@ class CodexClient:
                 stdout=stdout,
                 stderr=stderr,
                 payload=None,
-                human_output=True,
+                output_protocol="unstructured",
             )
 
         if not stdout.strip():
@@ -564,17 +565,17 @@ class CodexClient:
         stdout: str,
         stderr: str,
         payload: CodexJsonPayload | None,
-        human_output: bool,
+        output_protocol: CodexOutputProtocol,
     ) -> CodexProcessError:
         trusted_texts = codex_trusted_error_texts(
             payload=payload,
             stderr=stderr,
-            human_output=human_output,
+            output_protocol=output_protocol,
         )
-        if human_output:
-            # Human stderr multiplexes the banner, echoed prompt, progress, and
-            # model prose, so only explicit error records may name the failure or
-            # authorize a retry. The first record is the causal one.
+        if output_protocol == "unstructured":
+            # Unstructured CLI stderr multiplexes the banner, echoed prompt,
+            # progress, and model prose, so only explicit error records may name
+            # the failure or authorize a retry. The first record is the causal one.
             error_text = summarize_codex_error_text(
                 payload=payload,
                 stdout=stdout,
