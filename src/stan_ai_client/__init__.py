@@ -1,6 +1,6 @@
 from ._version import get_version
 from .claude import ClaudeCodeClient
-from .codex import CodexClient
+from .codex import CodexClient, validate_codex_output_schema
 from .grok import GrokClient
 from .exceptions import (
     AIClientError,
@@ -151,4 +151,5 @@ __all__ = [
     "StructuredOutputValidationError",
     "TextRunResult",
     "parse_rate_limit_info",
+    "validate_codex_output_schema",
 ]

@@ -113,6 +113,9 @@ def make_codex_structured_payload(
     )
 
 
+_ERROR_TEXT_LIMIT = 500
+
+
 def summarize_codex_error_text(
     *,
     payload: CodexJsonPayload | None,
@@ -123,16 +126,17 @@ def summarize_codex_error_text(
         summarized = _summarize_error_event(payload.error)
         if summarized:
             return summarized
-    if stderr.strip():
-        return stderr.strip()[:500]
-    return stdout.strip()[:500]
+    stripped_stderr = stderr.strip()
+    if stripped_stderr:
+        return stripped_stderr[-_ERROR_TEXT_LIMIT:]
+    return stdout.strip()[:_ERROR_TEXT_LIMIT]
 
 
 def _summarize_error_event(event: dict[str, Any]) -> str | None:
     for key in ("message", "error"):
         value = event.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()[:500]
+            return value.strip()[:_ERROR_TEXT_LIMIT]
         if isinstance(value, dict):
             nested = _summarize_error_event(value)
             if nested:

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from jsonschema.validators import Draft202012Validator
 
 from stan_ai_client import (
     AIClientTimeoutError,
@@ -27,8 +28,78 @@ from stan_ai_client import (
     NetworkUnavailableError,
     RateLimitRetryPolicy,
     StructuredSchema,
+    validate_codex_output_schema,
+)
+from stan_ai_client.codex import (
+    UNSUPPORTED_CODEX_SCHEMA_KEYWORDS,
+    _SCHEMA_MAPPING_KEYWORDS,
+    _SCHEMA_VALUE_KEYWORDS,
 )
 from stan_ai_client.codex_parser import CODEX_ERROR_EVENT_TYPES
+
+# Draft 2020-12 vocabulary keywords without their own jsonschema validator.
+# Keeping this inventory explicit prevents validator dispatch from being
+# mistaken for the complete vocabulary.
+DRAFT_2020_12_KEYWORDS_WITHOUT_VALIDATORS = frozenset(
+    {
+        "$anchor",
+        "$comment",
+        "$defs",
+        "$dynamicAnchor",
+        "$id",
+        "$schema",
+        "$vocabulary",
+        "contentEncoding",
+        "contentMediaType",
+        "contentSchema",
+        "default",
+        "deprecated",
+        "description",
+        "else",
+        "examples",
+        "maxContains",
+        "minContains",
+        "readOnly",
+        "then",
+        "title",
+        "writeOnly",
+    }
+)
+
+# Keywords that constrain a value directly or annotate a schema instead of
+# holding a subschema. Every other vocabulary keyword must be rejected or
+# enumerated by the preflight, or a nested unsupported keyword can hide below it.
+NON_SCHEMA_BEARING_SCHEMA_KEYWORDS = frozenset(
+    {
+        "$comment",
+        "$id",
+        "$ref",
+        "$schema",
+        "$vocabulary",
+        "const",
+        "default",
+        "deprecated",
+        "description",
+        "enum",
+        "examples",
+        "exclusiveMaximum",
+        "exclusiveMinimum",
+        "format",
+        "maxItems",
+        "maxLength",
+        "maximum",
+        "minItems",
+        "minLength",
+        "minimum",
+        "multipleOf",
+        "pattern",
+        "readOnly",
+        "required",
+        "title",
+        "type",
+        "writeOnly",
+    }
+)
 
 
 class RunRecorder:
@@ -329,15 +400,52 @@ def test_codex_text_mode_ignores_network_prose_in_progress_stderr(
     assert excinfo.value.stderr == stderr
 
 
-def test_codex_text_mode_trusts_prefixed_stderr_errors(
+def test_codex_text_mode_does_not_retry_rate_limit_prose(
     monkeypatch: pytest.MonkeyPatch,
-    july_31_dns_diagnostic: str,
 ) -> None:
     stderr = "\n".join(
         [
             "codex",
+            "The documentation says rate limit exceeded, retry after 60.",
+        ]
+    )
+    recorder = RunRecorder(
+        [
+            subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="", stderr=stderr
+            ),
+            subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="done\n", stderr=""
+            ),
+        ]
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+    sleeps: list[float] = []
+    monkeypatch.setattr("stan_ai_client.codex.time.sleep", sleeps.append)
+
+    with pytest.raises(CodexProcessError) as excinfo:
+        CodexClient().run_text(
+            "quote the documentation",
+            rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=120),
+        )
+
+    assert type(excinfo.value) is CodexProcessError
+    assert not isinstance(excinfo.value, CodexRateLimitError)
+    assert excinfo.value.stderr == stderr
+    assert len(recorder.calls) == 1
+    assert sleeps == []
+
+
+def test_codex_text_mode_trusts_prefixed_stderr_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    july_31_dns_diagnostic: str,
+) -> None:
+    causal_error = f"ERROR: {july_31_dns_diagnostic}"
+    stderr = "\n".join(
+        [
+            "codex",
             "partial progress",
-            f"ERROR: {july_31_dns_diagnostic}",
+            causal_error,
             "ERROR: stream disconnected",
         ]
     )
@@ -349,6 +457,7 @@ def test_codex_text_mode_trusts_prefixed_stderr_errors(
     with pytest.raises(CodexNetworkUnavailableError) as excinfo:
         CodexClient().run_text("hello")
 
+    assert str(excinfo.value) == causal_error
     assert excinfo.value.stderr == stderr
 
 
@@ -881,6 +990,59 @@ def test_codex_run_structured_rejects_non_object_schema(
             },
             "else",
         ),
+        (
+            {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "contentSchema": {"type": "string"},
+                    }
+                },
+                "required": ["summary"],
+                "additionalProperties": False,
+            },
+            "contentSchema",
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "contentEncoding": "base64",
+                    }
+                },
+                "required": ["summary"],
+                "additionalProperties": False,
+            },
+            "contentEncoding",
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {
+                    "sections": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "evidence_ids": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "uniqueItems": True,
+                                }
+                            },
+                            "required": ["evidence_ids"],
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+                "required": ["sections"],
+                "additionalProperties": False,
+            },
+            "uniqueItems",
+        ),
     ],
 )
 def test_codex_run_structured_rejects_unsupported_schema_subset(
@@ -898,6 +1060,336 @@ def test_codex_run_structured_rejects_unsupported_schema_subset(
         client.run_structured("hello", schema=StructuredSchema.from_dict(schema_dict))
 
     assert recorder.calls == []
+
+
+@pytest.mark.parametrize(
+    ("array_schema", "expected_path"),
+    [
+        (
+            {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": True,
+            },
+            "$.properties.evidence_ids.uniqueItems",
+        ),
+        (
+            {
+                "type": "array",
+                "contains": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "uniqueItems": True,
+                },
+            },
+            "$.properties.evidence_ids.contains.uniqueItems",
+        ),
+        (
+            {
+                "type": "array",
+                "prefixItems": [
+                    {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "uniqueItems": True,
+                    }
+                ],
+            },
+            "$.properties.evidence_ids.prefixItems[0].uniqueItems",
+        ),
+    ],
+)
+def test_validate_codex_output_schema_reports_nested_unique_items_path(
+    array_schema: dict[str, object],
+    expected_path: str,
+) -> None:
+    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"evidence_ids": array_schema},
+            "required": ["evidence_ids"],
+            "additionalProperties": False,
+        }
+    )
+    with pytest.raises(CodexSchemaValidationError) as excinfo:
+        validate_codex_output_schema(schema)
+
+    assert f"{expected_path} is not supported" in str(excinfo.value)
+
+
+def test_validate_codex_output_schema_rejects_root_any_of() -> None:
+    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": False,
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(CodexSchemaValidationError) as excinfo:
+        validate_codex_output_schema(schema)
+
+    assert "$.anyOf is not supported at the root" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("child_schema", "expected_path"),
+    [
+        (
+            {"anyOf": [False, {"type": "string"}]},
+            "$.properties.value.anyOf[0]",
+        ),
+        (
+            {"type": "array", "items": False},
+            "$.properties.value.items",
+        ),
+    ],
+)
+def test_validate_codex_output_schema_rejects_boolean_subschemas(
+    child_schema: dict[str, object], expected_path: str
+) -> None:
+    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"value": child_schema},
+            "required": ["value"],
+            "additionalProperties": False,
+        }
+    )
+
+    with pytest.raises(CodexSchemaValidationError) as excinfo:
+        validate_codex_output_schema(schema)
+
+    assert f"{expected_path} boolean schemas are not supported" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("ref", "expected_message"),
+    [
+        (
+            "#/$defs/missing",
+            "$.properties.value.$ref does not resolve to a schema",
+        ),
+        (
+            "https://example.com/schema.json",
+            "$.properties.value.$ref must be a local reference",
+        ),
+        (
+            "#/$defs/disabled",
+            "$.properties.value.$ref resolves to a boolean schema, "
+            "which is not supported",
+        ),
+    ],
+)
+def test_validate_codex_output_schema_rejects_invalid_refs(
+    ref: str, expected_message: str
+) -> None:
+    definitions: dict[str, object] = {}
+    if ref == "#/$defs/disabled":
+        definitions["disabled"] = False
+    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"value": {"$ref": ref}},
+            "required": ["value"],
+            "additionalProperties": False,
+            "$defs": definitions,
+        }
+    )
+
+    with pytest.raises(CodexSchemaValidationError) as excinfo:
+        validate_codex_output_schema(schema)
+
+    assert expected_message in str(excinfo.value)
+
+
+def test_validate_codex_output_schema_accepts_resolvable_local_refs() -> None:
+    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "value": {"$ref": "#/$defs/value"},
+                "escaped": {"$ref": "#/$defs/a~1b~0c"},
+                "recursive": {"$ref": "#"},
+            },
+            "required": ["value", "escaped", "recursive"],
+            "additionalProperties": False,
+            "$defs": {
+                "value": {"type": "string"},
+                "a/b~c": {"type": "integer"},
+            },
+        }
+    )
+
+    validate_codex_output_schema(schema)
+
+
+@pytest.mark.parametrize(
+    ("schema_type", "keyword", "value"),
+    [
+        ("string", "$anchor", "value"),
+        ("string", "$dynamicAnchor", "value"),
+        ("string", "$dynamicRef", "#value"),
+        ("string", "$recursiveAnchor", "value"),
+        ("string", "$recursiveRef", "#"),
+        ("array", "contains", {"type": "string"}),
+        ("array", "maxContains", 2),
+        ("array", "minContains", 1),
+        ("string", "contentEncoding", "base64"),
+        ("string", "contentMediaType", "application/json"),
+        ("string", "contentSchema", {"type": "string"}),
+        ("object", "dependencies", {"value": ["other"]}),
+        ("object", "maxProperties", 2),
+        ("object", "minProperties", 1),
+        ("array", "prefixItems", [{"type": "string"}]),
+        ("object", "patternProperties", {"^x": {"type": "string"}}),
+        ("object", "propertyNames", {"pattern": "^x"}),
+        ("array", "unevaluatedItems", False),
+        ("object", "unevaluatedProperties", False),
+    ],
+)
+def test_validate_codex_output_schema_rejects_unsupported_schema_keywords(
+    schema_type: str,
+    keyword: str,
+    value: object,
+) -> None:
+    child_schema: dict[str, object] = {"type": schema_type, keyword: value}
+    if schema_type == "array":
+        child_schema["items"] = {"type": "string"}
+    elif schema_type == "object":
+        child_schema.update(
+            properties={},
+            required=[],
+            additionalProperties=False,
+        )
+
+    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"value": child_schema},
+            "required": ["value"],
+            "additionalProperties": False,
+        }
+    )
+
+    with pytest.raises(CodexSchemaValidationError) as excinfo:
+        validate_codex_output_schema(schema)
+
+    assert f"$.properties.value.{keyword} is not supported" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("mapping_keyword", "mapping_key", "expected_path"),
+    [
+        ("properties", "a.b", '$.properties["a.b"].uniqueItems'),
+        ("$defs", "items[0]", '$.$defs["items[0]"].uniqueItems'),
+    ],
+)
+def test_validate_codex_output_schema_escapes_mapping_keys_in_paths(
+    mapping_keyword: str,
+    mapping_key: str,
+    expected_path: str,
+) -> None:
+    child_schema: dict[str, object] = {
+        "type": "array",
+        "items": {"type": "string"},
+        "uniqueItems": True,
+    }
+    schema_dict: dict[str, object] = {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+        mapping_keyword: {mapping_key: child_schema},
+    }
+    if mapping_keyword == "properties":
+        schema_dict["required"] = [mapping_key]
+
+    schema: StructuredSchema[dict[str, Any]] = StructuredSchema.from_dict(schema_dict)
+
+    with pytest.raises(CodexSchemaValidationError) as excinfo:
+        validate_codex_output_schema(schema)
+
+    assert expected_path in str(excinfo.value)
+
+
+def test_codex_schema_preflight_handles_every_draft_2020_12_keyword() -> None:
+    draft_2020_12_keywords = (
+        set(Draft202012Validator.VALIDATORS)
+        | DRAFT_2020_12_KEYWORDS_WITHOUT_VALIDATORS
+    )
+    handled = (
+        set(UNSUPPORTED_CODEX_SCHEMA_KEYWORDS)
+        | set(_SCHEMA_MAPPING_KEYWORDS)
+        | set(_SCHEMA_VALUE_KEYWORDS)
+        | NON_SCHEMA_BEARING_SCHEMA_KEYWORDS
+    )
+
+    assert draft_2020_12_keywords - handled == set()
+
+
+def test_codex_structured_mode_surfaces_provider_error_from_stderr_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prompt = "Generate the weekly Delta Growth report with evidence identifiers."
+    provider_error = (
+        "ERROR: unexpected status 400 Bad Request: "
+        + "provider diagnostic context " * 30
+        + '{"error":{"message":"Invalid schema for response_format \'output\': '
+        "In context=('properties', 'evidence_ids'), 'uniqueItems' is not permitted.\","
+        '"type":"invalid_request_error","param":"text.format.schema",'
+        '"code":"invalid_json_schema"}}'
+    )
+    assert len(provider_error) > 500
+    stderr = "\n".join(
+        [
+            ">_ You are using OpenAI Codex in ~/uzealot",
+            "",
+            "model: gpt-5.6-sol",
+            "--------",
+            "user",
+            prompt,
+            "",
+            "thinking",
+            *(f"progress line {index} while the model works" for index in range(30)),
+            provider_error,
+            "shutting down",
+        ]
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=stderr)
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+            "additionalProperties": False,
+        }
+    )
+    with pytest.raises(CodexProcessError) as excinfo:
+        CodexClient().run_structured(prompt, schema=schema)
+
+    message = str(excinfo.value)
+    assert type(excinfo.value) is CodexProcessError
+    assert message == provider_error[-500:]
+    assert "invalid_json_schema" in message
+    assert "uniqueItems" in message
+    assert prompt not in message
+    assert excinfo.value.stderr == stderr
+    assert excinfo.value.stdout == ""
+
 
 @pytest.mark.parametrize(
     "options, expected_resume_arg",

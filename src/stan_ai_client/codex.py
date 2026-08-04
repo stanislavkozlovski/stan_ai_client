@@ -5,10 +5,12 @@ import logging
 import os
 import tempfile
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 from typing import Any, Callable, Mapping, TypeVar
+from urllib.parse import unquote
 
 from jsonschema.exceptions import ValidationError
 
@@ -61,14 +63,56 @@ REDACTED_ARG_FLAGS = {
     OUTPUT_SCHEMA_ARG_FLAG,
 }
 UNSUPPORTED_CODEX_SCHEMA_KEYWORDS = (
+    "$anchor",
+    "$dynamicAnchor",
+    "$dynamicRef",
+    "$recursiveAnchor",
+    "$recursiveRef",
     "allOf",
     "oneOf",
     "not",
     "dependentRequired",
     "dependentSchemas",
+    "dependencies",
     "if",
     "then",
     "else",
+    "uniqueItems",
+    "contains",
+    "maxContains",
+    "minContains",
+    "contentSchema",
+    "contentEncoding",
+    "contentMediaType",
+    "maxProperties",
+    "minProperties",
+    "prefixItems",
+    "patternProperties",
+    "propertyNames",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+)
+# Every Draft 2020-12 schema-bearing keyword is either rejected above or
+# enumerated by ``_iter_child_schemas``. Keeping the locations explicit avoids
+# treating annotation objects such as ``default`` and ``examples`` as schemas.
+# Mapping keywords hold ``{name: schema}``; value keywords hold one schema or a
+# list of schemas.
+_SCHEMA_MAPPING_KEYWORDS = (
+    "$defs",
+    "definitions",
+    "properties",
+    "patternProperties",
+)
+_SCHEMA_VALUE_KEYWORDS = (
+    "additionalProperties",
+    "anyOf",
+    "contains",
+    "contentSchema",
+    "items",
+    "prefixItems",
+    "propertyNames",
+    "unevaluatedItems",
+    "unevaluatedProperties",
 )
 TRun = TypeVar("TRun")
 TStructured = TypeVar("TStructured")
@@ -522,14 +566,32 @@ class CodexClient:
         payload: CodexJsonPayload | None,
         human_output: bool,
     ) -> CodexProcessError:
-        error_text = summarize_codex_error_text(payload=payload, stdout=stdout, stderr=stderr)
         trusted_texts = codex_trusted_error_texts(
             payload=payload,
             stderr=stderr,
             human_output=human_output,
         )
+        if human_output:
+            # Human stderr multiplexes the banner, echoed prompt, progress, and
+            # model prose, so only explicit error records may name the failure or
+            # authorize a retry. The first record is the causal one.
+            error_text = summarize_codex_error_text(
+                payload=payload,
+                stdout=stdout,
+                stderr=trusted_texts[0] if trusted_texts else stderr,
+            )
+            rate_limit_texts = trusted_texts
+        else:
+            error_text = summarize_codex_error_text(
+                payload=payload,
+                stdout=stdout,
+                stderr=stderr,
+            )
+            # JSONL stdout is not part of the trusted texts, so the summary is
+            # the only rate-limit candidate for a failure reported there alone.
+            rate_limit_texts = (error_text, *trusted_texts)
         rate_limit_text = next(
-            (text for text in (error_text, *trusted_texts) if is_rate_limit_text(text)),
+            (text for text in rate_limit_texts if is_rate_limit_text(text)),
             None,
         )
         if rate_limit_text is not None:
@@ -711,7 +773,7 @@ class CodexClient:
         )
 
     def _write_schema_file(self, schema: StructuredSchema[Any]) -> str:
-        _validate_codex_output_schema(schema)
+        validate_codex_output_schema(schema)
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
@@ -767,11 +829,19 @@ def _resume_session_arg_index(argv: tuple[str, ...]) -> int | None:
     return session_index
 
 
-def _validate_codex_output_schema(schema: StructuredSchema[Any]) -> None:
+def validate_codex_output_schema(schema: StructuredSchema[Any]) -> None:
+    """Check ``schema`` against the Codex/OpenAI structured-output subset.
+
+    Raises :class:`CodexSchemaValidationError` listing every violation with its
+    JSON path. Runs no subprocess and makes no network request, so callers can
+    validate schemas at startup or in CI. ``CodexClient.run_structured`` applies
+    the same check before invoking Codex.
+    """
     errors = list(
         _iter_codex_output_schema_errors(
             schema.schema,
             path="$",
+            root_schema=schema.schema,
             require_root_object=True,
         )
     )
@@ -786,8 +856,11 @@ def _iter_codex_output_schema_errors(
     node: object,
     *,
     path: str,
+    root_schema: Mapping[str, Any],
     require_root_object: bool = False,
 ) -> list[str]:
+    if isinstance(node, bool):
+        return [f"{path} boolean schemas are not supported"]
     if not isinstance(node, dict):
         return []
 
@@ -795,6 +868,22 @@ def _iter_codex_output_schema_errors(
     schema_type = node.get("type")
     if require_root_object and schema_type != "object":
         errors.append(f"{path} must be a root object schema")
+    if require_root_object and "anyOf" in node:
+        errors.append(f"{path}.anyOf is not supported at the root")
+
+    ref = node.get("$ref")
+    if ref is not None:
+        ref_path = f"{path}.$ref"
+        if not isinstance(ref, str) or not ref.startswith("#"):
+            errors.append(f"{ref_path} must be a local reference")
+        else:
+            target = _resolve_local_schema_ref(root_schema, ref)
+            if target is None:
+                errors.append(f"{ref_path} does not resolve to a schema")
+            elif isinstance(target, bool):
+                errors.append(
+                    f"{ref_path} resolves to a boolean schema, which is not supported"
+                )
 
     is_object_schema = (
         schema_type == "object"
@@ -830,41 +919,123 @@ def _iter_codex_output_schema_errors(
         if node.get("additionalProperties") is not False:
             errors.append(f"{path}.additionalProperties must be false")
 
-    errors.extend(_iter_schema_mapping_errors(node.get("properties"), f"{path}.properties"))
-    errors.extend(_iter_schema_mapping_errors(node.get("$defs"), f"{path}.$defs"))
-    errors.extend(_iter_schema_mapping_errors(node.get("definitions"), f"{path}.definitions"))
-
-    items = node.get("items")
-    if isinstance(items, dict):
-        errors.extend(_iter_codex_output_schema_errors(items, path=f"{path}.items"))
-    elif isinstance(items, list):
-        for index, item in enumerate(items):
-            errors.extend(
-                _iter_codex_output_schema_errors(item, path=f"{path}.items[{index}]")
+    for suffix, child in _iter_child_schemas(node):
+        errors.extend(
+            _iter_codex_output_schema_errors(
+                child,
+                path=f"{path}.{suffix}",
+                root_schema=root_schema,
             )
+        )
 
     for keyword in UNSUPPORTED_CODEX_SCHEMA_KEYWORDS:
         if keyword in node:
             errors.append(f"{path}.{keyword} is not supported")
 
-    value = node.get("anyOf")
-    if isinstance(value, list):
-        for index, item in enumerate(value):
-            errors.extend(
-                _iter_codex_output_schema_errors(
-                    item,
-                    path=f"{path}.anyOf[{index}]",
-                )
-            )
-
     return errors
 
 
-def _iter_schema_mapping_errors(value: object, path: str) -> list[str]:
-    if not isinstance(value, dict):
-        return []
+def _resolve_local_schema_ref(
+    root_schema: Mapping[str, Any], ref: str
+) -> object | None:
+    if ref == "#":
+        return root_schema
+    if not ref.startswith("#/"):
+        return None
 
-    errors: list[str] = []
-    for key, child in value.items():
-        errors.extend(_iter_codex_output_schema_errors(child, path=f"{path}.{key}"))
-    return errors
+    try:
+        pointer = unquote(ref[1:], errors="strict")
+    except UnicodeDecodeError:
+        return None
+
+    parts: list[str] = []
+    for encoded_part in pointer[1:].split("/"):
+        part = _decode_json_pointer_part(encoded_part)
+        if part is None:
+            return None
+        parts.append(part)
+
+    resolved: object = root_schema
+    index = 0
+    while index < len(parts):
+        if not isinstance(resolved, dict):
+            return None
+
+        keyword = parts[index]
+        if keyword in _SCHEMA_MAPPING_KEYWORDS:
+            children = resolved.get(keyword)
+            if not isinstance(children, dict) or index + 1 >= len(parts):
+                return None
+            name = parts[index + 1]
+            if name not in children:
+                return None
+            resolved = children[name]
+            index += 2
+            continue
+
+        if keyword not in _SCHEMA_VALUE_KEYWORDS or keyword not in resolved:
+            return None
+        resolved = resolved[keyword]
+        index += 1
+        if isinstance(resolved, list):
+            if index >= len(parts):
+                return None
+            array_index = parts[index]
+            if not array_index.isdigit() or (
+                len(array_index) > 1 and array_index.startswith("0")
+            ):
+                return None
+            item_index = int(array_index)
+            if item_index >= len(resolved):
+                return None
+            resolved = resolved[item_index]
+            index += 1
+
+    if isinstance(resolved, (bool, dict)):
+        return resolved
+    return None
+
+
+def _decode_json_pointer_part(encoded_part: str) -> str | None:
+    decoded: list[str] = []
+    index = 0
+    while index < len(encoded_part):
+        character = encoded_part[index]
+        if character != "~":
+            decoded.append(character)
+            index += 1
+            continue
+        if index + 1 >= len(encoded_part) or encoded_part[index + 1] not in "01":
+            return None
+        decoded.append("~" if encoded_part[index + 1] == "0" else "/")
+        index += 2
+    return "".join(decoded)
+
+
+def _iter_child_schemas(node: Mapping[str, Any]) -> Iterator[tuple[str, object]]:
+    """Yield every schema-bearing child of ``node`` with its JSON path suffix.
+
+    Recursion passes through this one boundary, so a schema-bearing keyword is
+    either rejected by ``UNSUPPORTED_CODEX_SCHEMA_KEYWORDS`` or enumerated here;
+    it cannot silently hide a nested unsupported keyword.
+    """
+    for keyword in _SCHEMA_MAPPING_KEYWORDS:
+        value = node.get(keyword)
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if isinstance(key, str) and key.isidentifier():
+                    suffix = f"{keyword}.{key}"
+                else:
+                    suffix = f"{keyword}[{json.dumps(key, ensure_ascii=False)}]"
+                yield suffix, child
+
+    for keyword in _SCHEMA_VALUE_KEYWORDS:
+        value = node.get(keyword)
+        if isinstance(value, dict):
+            yield keyword, value
+        elif isinstance(value, bool):
+            if keyword != "additionalProperties":
+                yield keyword, value
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                yield f"{keyword}[{index}]", child

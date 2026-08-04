@@ -464,9 +464,38 @@ and deletes the temporary schema file.
 Codex schemas are additionally checked against the OpenAI structured-output
 subset before the temporary file is created. The root schema must be an object,
 object properties must all be listed in `required`, and objects must set
-`additionalProperties: false`. Unsupported schema keywords such as `allOf`,
-`oneOf`, `not`, `dependentRequired`, `dependentSchemas`, `if`, `then`, and
-`else` are rejected locally.
+`additionalProperties: false`. Root-level `anyOf`, boolean subschemas, external
+references, and unresolved local references are also rejected. Unsupported
+schema keywords such as `allOf`,
+`oneOf`, `not`, `dependentRequired`, `dependentSchemas`, `if`, `then`, `else`,
+and `uniqueItems`, plus unsupported reference, content, and schema-container
+keywords such as `$dynamicRef`, `contentEncoding`, `contentSchema`, `contains`,
+`prefixItems`, `patternProperties`, `propertyNames`, `unevaluatedItems`, and
+`unevaluatedProperties`, are rejected locally with the offending JSON path.
+
+The same check is exported as `validate_codex_output_schema(schema)`. It runs
+no subprocess and makes no network request, so callers can validate schemas at
+startup or in CI instead of discovering an incompatibility mid-run:
+
+```python
+from stan_ai_client import StructuredSchema, validate_codex_output_schema
+
+schema = StructuredSchema.from_dict(
+    {
+        "type": "object",
+        "properties": {
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": True,
+            }
+        },
+        "required": ["tags"],
+        "additionalProperties": False,
+    }
+)
+validate_codex_output_schema(schema)  # raises CodexSchemaValidationError locally
+```
 
 Codex structured mode supports `session_id` and `continue_last_session`;
 `--output-schema` is passed to `codex exec` before the `resume` subcommand.
