@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
+from typing import Literal
 
 from .codex_parser import CODEX_ERROR_EVENT_TYPES
 from .types import ClaudeJsonPayload, CodexJsonPayload, GrokJsonPayload
@@ -37,6 +38,8 @@ _CLAUDE_NETWORK_UNAVAILABLE_MARKERS = _NETWORK_UNAVAILABLE_MARKERS + (
 )
 _TRUSTED_ERROR_KEYS = ("message", "error", "cause")
 
+CodexOutputProtocol = Literal["unstructured", "jsonl"]
+
 
 def has_network_unavailable_evidence(texts: Sequence[str]) -> bool:
     """Callers pass the provider's trusted error texts. A legacy error summary
@@ -67,13 +70,14 @@ def codex_trusted_error_texts(
     *,
     payload: CodexJsonPayload | None,
     stderr: str,
-    human_output: bool,
+    output_protocol: CodexOutputProtocol,
 ) -> tuple[str, ...]:
-    """Human output multiplexes progress and model content onto stderr, so only
-    its explicit error records are trusted there. JSONL stderr is diagnostic."""
+    """Unstructured CLI output multiplexes progress and model content onto
+    stderr, so only its explicit error records are trusted there. JSONL stderr
+    is diagnostic."""
     texts: list[str] = []
     if stderr.strip():
-        if human_output:
+        if output_protocol == "unstructured":
             texts.extend(_prefixed_error_lines(stderr, prefix="error:"))
         else:
             texts.append(stderr)
