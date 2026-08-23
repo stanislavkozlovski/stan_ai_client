@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from stan_ai_client.codex_parser import (
     CODEX_AUTO_REVIEW_DENIAL_MARKER,
     codex_auto_review_denial_text,
@@ -135,34 +137,22 @@ def test_codex_auto_review_denial_ignores_unrelated_declined_item() -> None:
     assert codex_auto_review_denial_text(payload) is None
 
 
-def test_codex_auto_review_denial_ignores_marker_in_agent_prose() -> None:
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"type": "agent_message", "text": CODEX_AUTO_REVIEW_DENIAL_MARKER},
+        {
+            "type": "mcp_tool_call",
+            "status": "failed",
+            "error": {"message": CODEX_AUTO_REVIEW_DENIAL_MARKER},
+        },
+    ],
+)
+def test_codex_auto_review_denial_ignores_marker_outside_declined_commands(
+    item: dict[str, object],
+) -> None:
     payload = parse_codex_jsonl_payload(
-        json.dumps(
-            {
-                "type": "item.completed",
-                "item": {
-                    "type": "agent_message",
-                    "text": CODEX_AUTO_REVIEW_DENIAL_MARKER,
-                },
-            }
-        )
-    )
-
-    assert codex_auto_review_denial_text(payload) is None
-
-
-def test_codex_auto_review_denial_ignores_marker_in_mcp_failure() -> None:
-    payload = parse_codex_jsonl_payload(
-        json.dumps(
-            {
-                "type": "item.completed",
-                "item": {
-                    "type": "mcp_tool_call",
-                    "status": "failed",
-                    "error": {"message": CODEX_AUTO_REVIEW_DENIAL_MARKER},
-                },
-            }
-        )
+        json.dumps({"type": "item.completed", "item": item})
     )
 
     assert codex_auto_review_denial_text(payload) is None

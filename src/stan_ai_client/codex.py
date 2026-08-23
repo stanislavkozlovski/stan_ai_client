@@ -662,10 +662,10 @@ class CodexClient:
         payload: CodexJsonPayload | None,
         permission_mode: CodexPermissionMode,
     ) -> None:
-        if permission_mode != "auto":
+        if permission_mode != "auto" or payload is None:
             return
         denial_text = codex_auto_review_denial_text(payload)
-        if denial_text is None or payload is None:
+        if denial_text is None:
             return
 
         approval_prompt = payload.result if payload.result is not None else denial_text

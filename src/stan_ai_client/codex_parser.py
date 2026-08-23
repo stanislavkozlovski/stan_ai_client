@@ -45,7 +45,7 @@ def recover_codex_jsonl_prefix_payload(text: str) -> CodexJsonPayload | None:
     return _make_codex_jsonl_payload(events)
 
 
-def codex_auto_review_denial_text(payload: CodexJsonPayload | None) -> str | None:
+def codex_auto_review_denial_text(payload: CodexJsonPayload) -> str | None:
     """Return Codex's verbatim auto-review denial when JSONL proves one occurred.
 
     A generic ``declined`` status can describe unrelated execution failures, so
@@ -53,9 +53,6 @@ def codex_auto_review_denial_text(payload: CodexJsonPayload | None) -> str | Non
     provider-owned declined command record. Agent messages and MCP failure text
     are deliberately not inspected because they can contain untrusted text.
     """
-    if payload is None:
-        return None
-
     for event in payload.events:
         if event.get("type") != "item.completed":
             continue
