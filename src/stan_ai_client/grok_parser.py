@@ -15,6 +15,9 @@ _CANCELLATION_STOP_REASON_KEYS = frozenset({"stopReason", "stop_reason"})
 _CANCELLATION_CATEGORY_KEYS = frozenset(
     {"cancellationCategory", "cancellation_category"}
 )
+_PERMISSION_CANCELLATION_CATEGORIES = frozenset(
+    {"permissioncancelled", "permissionrejected"}
+)
 
 
 def is_grok_error_payload(payload: GrokJsonPayload) -> bool:
@@ -82,6 +85,15 @@ def is_grok_cancelled_payload(payload: GrokJsonPayload) -> bool:
     before it raises the cancellation.
     """
     return bool(_cancellation_signal_keys(payload))
+
+
+def is_grok_permission_cancellation(payload: GrokJsonPayload) -> bool:
+    """True only for Grok's explicit permission cancellation categories."""
+    category = payload.cancellation_category
+    if category is None:
+        return False
+    normalized = "".join(character for character in category.casefold() if character.isalnum())
+    return normalized in _PERMISSION_CANCELLATION_CATEGORIES
 
 
 def is_grok_structured_envelope(payload: GrokJsonPayload) -> bool:

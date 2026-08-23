@@ -135,7 +135,9 @@ class CodexClient:
         executable: str = "codex",
         default_model: str = "gpt-5.6-sol",
         default_reasoning_effort: CodexReasoningEffort = "medium",
-        default_permission_mode: Literal["default", "bypassPermissions"] = "bypassPermissions",
+        default_permission_mode: Literal[
+            "default", "bypassPermissions", "auto"
+        ] = "bypassPermissions",
         default_timeout_seconds: float = 120.0,
         default_options: CodexRunOptions | None = None,
         logger: logging.Logger | None = None,
@@ -168,6 +170,8 @@ def run_structured(
 `--dangerously-bypass-approvals-and-sandbox` to `codex exec`. Use
 `CodexRunOptions(permission_mode="default")` or
 `CodexClient(default_permission_mode="default")` to omit that flag.
+Use `permission_mode="auto"` to pass `--approve-for-me` instead of the bypass
+flag.
 
 ### `GrokClient`
 
@@ -257,7 +261,16 @@ Important mappings:
 - `session_id`: `--resume <session_id>`
 - `continue_last_session`: `--continue`
 - `fork_session`: `--fork-session`
+- `permission_mode="auto"`: `--permission-mode auto`
+- `permission_mode="bypassPermissions"`:
+  `--dangerously-skip-permissions`
+- `permission_mode="dontAsk"`: `--permission-mode dontAsk`; this denies
+  unapproved actions without prompting and is not bypass
 - `extra_args`: escape hatch for unsupported Claude flags
+
+Omitting `permission_mode` preserves the Claude CLI's configured/default
+posture. The installed CLI calls automatic review `auto`; the library option
+does not emit the proposed but nonexistent `--enable-auto-mode` spelling.
 
 ### `CodexRunOptions`
 
@@ -271,7 +284,7 @@ class CodexRunOptions:
     reasoning_effort: CodexReasoningEffort | None = None
     timeout_seconds: float | None = None
     input_mode: Literal["stdin", "argv"] | None = None
-    permission_mode: Literal["default", "bypassPermissions"] | None = None
+    permission_mode: Literal["default", "bypassPermissions", "auto"] | None = None
     session_id: str | None = None
     continue_last_session: bool | None = None
     skip_git_repo_check: bool | None = None
@@ -291,6 +304,7 @@ Important mappings:
 - `model`: `--model`
 - `reasoning_effort`: `-c model_reasoning_effort="<value>"`
 - `permission_mode="bypassPermissions"`: `--dangerously-bypass-approvals-and-sandbox`
+- `permission_mode="auto"`: `--approve-for-me`
 - `permission_mode="default"`: omit the bypass flag
 - `input_mode="stdin"`: prompt sent through stdin with `codex exec -`
 - `input_mode="argv"`: prompt appended to argv after an option separator
@@ -318,7 +332,7 @@ class GrokRunOptions:
     effort: GrokEffort | None = None
     timeout_seconds: float | None = None
     permission_mode: Literal[
-        "acceptEdits", "bypassPermissions", "default", "dontAsk", "plan"
+        "acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"
     ] | None = None
     session_id: str | None = None
     continue_last_session: bool | None = None
@@ -369,6 +383,54 @@ Using `permission_deny_rules=("Bash",)` would deny shell calls if the
 tool were visible, but would not prevent Grok from choosing it. In unattended
 runs, a visible tool without a matching permission rule can still trigger a
 permission cancellation.
+
+### Automatic permission review
+
+`permission_mode="auto"` selects each CLI's own automatic review mode:
+
+| Client | Emitted flag | Existing default |
+| --- | --- | --- |
+| Claude | `--permission-mode auto` | omit the permission flag |
+| Codex | `--approve-for-me` | `bypassPermissions` |
+| Grok | `--permission-mode auto` | omit the permission flag |
+
+Auto mode never emits Claude's `--dangerously-skip-permissions`, Codex's
+`--dangerously-bypass-approvals-and-sandbox`, or Grok's `--always-approve`.
+Other options—tools, cwd, prompts, session flags, output format, and timeouts—
+are resolved and emitted exactly as in other permission modes.
+
+Machine-readable approval stops raise the provider-neutral
+`ApprovalRequiredError` through a concrete provider type:
+
+- `ClaudeApprovalRequiredError`
+- `CodexApprovalRequiredError`
+- `GrokApprovalRequiredError`
+
+Every approval error is also its provider's `ProcessError` subtype and exposes
+`command`, `returncode`, `stdout`, `stderr`, and `payload`. Its
+`approval_prompt` preserves the caller-facing text exactly as decoded from the
+CLI response; it is not stripped or summarized.
+
+```python
+from stan_ai_client import ApprovalRequiredError, ClaudeCodeClient, RunOptions
+
+try:
+    ClaudeCodeClient().run_structured(
+        "Apply the change.",
+        schema=schema,
+        options=RunOptions(permission_mode="auto"),
+    )
+except ApprovalRequiredError as exc:
+    relay_to_user(exc.approval_prompt)
+```
+
+There is intentionally no stdin prompt, approval grant, automatic acceptance,
+or retry loop. Claude classification uses JSON `permission_denials`; Grok uses
+its explicit permission-cancellation category; Codex uses the native
+auto-review denial record in `codex exec --json` events. This makes detection
+available in Claude JSON/structured, Grok JSON/structured, and Codex JSONL
+modes. Modes without a trustworthy machine-readable signal retain their normal
+error behavior instead of classifying text heuristically.
 
 ## Execution Modes
 
@@ -579,6 +641,7 @@ Provider-specific exceptions remain available:
 - `ClaudeExecutableNotFoundError`
 - `ClaudeTimeoutError`
 - `ClaudeProcessError`
+- `ClaudeApprovalRequiredError`
 - `ClaudeNetworkUnavailableError`
 - `ClaudeProtocolError`
 - `ClaudeRateLimitError`
@@ -588,6 +651,7 @@ Provider-specific exceptions remain available:
 - `CodexExecutableNotFoundError`
 - `CodexTimeoutError`
 - `CodexProcessError`
+- `CodexApprovalRequiredError`
 - `CodexNetworkUnavailableError`
 - `CodexProtocolError`
 - `CodexRateLimitError`
@@ -597,6 +661,7 @@ Provider-specific exceptions remain available:
 - `GrokExecutableNotFoundError`
 - `GrokTimeoutError`
 - `GrokProcessError`
+- `GrokApprovalRequiredError`
 - `GrokNetworkUnavailableError`
 - `GrokProtocolError`
 - `GrokRateLimitError`
@@ -611,6 +676,7 @@ Provider-neutral base classes are also exported:
 - `AIClientTimeoutError`
 - `ExecutableNotFoundError`
 - `ProcessError`
+- `ApprovalRequiredError`
 - `NetworkUnavailableError`
 - `ProtocolError`
 - `SchemaValidationError`
@@ -624,7 +690,8 @@ Catch provider-specific exceptions when you care which CLI failed. Catch
 provider-neutral exceptions when the caller should handle Claude, Codex, and
 Grok the same way.
 
-Every `GrokProtocolError` and `GrokCancelledError` exposes `session_id`,
+Every `GrokProtocolError`, `GrokCancelledError`, and
+`GrokApprovalRequiredError` exposes `session_id`,
 `request_id`, `stop_reason`, and `cancellation_category` when Grok supplied
 them, while the complete raw streams remain available as `stdout` and `stderr`.
 `GrokMalformedStructuredOutputError` also exposes a safe `detail` and
@@ -733,6 +800,7 @@ Codex:
 - argv mode appends the prompt after `--`
 - argv mode sends empty stdin so inherited piped input is not added as context
 - `bypassPermissions` adds `--dangerously-bypass-approvals-and-sandbox`
+- `auto` adds `--approve-for-me` instead of the bypass flag
 
 Both clients copy `os.environ`, merge `options.env`, preserve raw stdout/stderr
 on results and errors, and run synchronously through `subprocess.run`.

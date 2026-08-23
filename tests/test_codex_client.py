@@ -12,6 +12,8 @@ from jsonschema.validators import Draft202012Validator
 
 from stan_ai_client import (
     AIClientTimeoutError,
+    ApprovalRequiredError,
+    CodexApprovalRequiredError,
     CodexClient,
     CodexCodeError,
     CodexExecutableNotFoundError,
@@ -163,6 +165,97 @@ def test_codex_run_text_uses_stdin_and_default_bypass(
     assert "--dangerously-bypass-approvals-and-sandbox" in argv
     assert argv[argv.index("--model") + 1] == "gpt-5.6-sol"
     assert 'model_reasoning_effort="medium"' in argv
+
+
+def test_codex_auto_mode_uses_automatic_review_without_bypass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="done\n", stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    CodexClient().run_text(
+        "hello",
+        options=CodexRunOptions(permission_mode="auto"),
+    )
+
+    argv = recorder.calls[0]["argv"]
+    assert "--approve-for-me" in argv
+    assert "--dangerously-bypass-approvals-and-sandbox" not in argv
+
+
+def test_codex_auto_mode_surfaces_verbatim_approval_prompt_from_jsonl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    denial = (
+        "This action was rejected due to unacceptable risk.\n"
+        "Reason: command can delete data"
+    )
+    approval_prompt = "  I need your approval before I can continue.\nPlease review it.  "
+    stdout = "\n".join(
+        json.dumps(event)
+        for event in (
+            {"type": "thread.started", "thread_id": "thread-1"},
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "command_execution",
+                    "status": "declined",
+                    "aggregated_output": denial,
+                },
+            },
+            {
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": approval_prompt},
+            },
+            {"type": "turn.completed", "usage": {}},
+        )
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexApprovalRequiredError) as excinfo:
+        CodexClient().run_json(
+            "remove data",
+            options=CodexRunOptions(permission_mode="auto"),
+        )
+
+    error = excinfo.value
+    assert isinstance(error, ApprovalRequiredError)
+    assert isinstance(error, CodexProcessError)
+    assert error.approval_prompt == approval_prompt
+    assert error.returncode == 0
+    assert error.stdout == stdout
+
+
+def test_codex_auto_mode_does_not_misclassify_unrelated_declined_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = json.dumps(
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "status": "declined",
+                "aggregated_output": "command failed before it started",
+            },
+        }
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=1, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexProcessError) as excinfo:
+        CodexClient().run_json(
+            "hello",
+            options=CodexRunOptions(permission_mode="auto"),
+        )
+
+    assert not isinstance(excinfo.value, ApprovalRequiredError)
 
 
 def test_codex_client_init_defaults() -> None:

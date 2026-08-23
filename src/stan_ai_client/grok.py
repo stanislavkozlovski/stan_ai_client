@@ -20,6 +20,7 @@ from ._network import (
 )
 from ._retry import run_with_rate_limit_retry
 from .exceptions import (
+    GrokApprovalRequiredError,
     GrokCancelledError,
     GrokExecutableNotFoundError,
     GrokMalformedStructuredOutputError,
@@ -36,6 +37,7 @@ from .grok_parser import (
     classify_grok_structured_stdout,
     is_grok_cancelled_payload,
     is_grok_error_payload,
+    is_grok_permission_cancellation,
     summarize_grok_error_text,
     try_parse_grok_json_payload,
 )
@@ -132,9 +134,15 @@ class GrokClient:
         completed, metadata = self._execute(prepared)
         stdout = completed.stdout
         stderr = completed.stderr
+        payload = self._stamp(try_parse_grok_json_payload(stdout), metadata)
+        self._raise_if_approval_required(
+            completed,
+            metadata,
+            payload=payload,
+            permission_mode=effective.permission_mode,
+        )
 
         if completed.returncode != 0:
-            payload = self._stamp(try_parse_grok_json_payload(stdout), metadata)
             raise self._build_process_error(
                 metadata,
                 returncode=completed.returncode,
@@ -143,7 +151,6 @@ class GrokClient:
                 payload=payload,
             )
 
-        payload = self._stamp(try_parse_grok_json_payload(stdout), metadata)
         if payload is not None and is_grok_error_payload(payload):
             raise self._build_process_error(
                 metadata,
@@ -184,7 +191,11 @@ class GrokClient:
     def _run_json_once(self, prompt: str, *, options: GrokRunOptions | None = None) -> GrokJsonRunResult:
         prepared, effective = self._prepare(prompt, output_format="json", options=options)
         self._log_start(prompt, output_format="json", prepared=prepared, effective=effective)
-        completed, metadata, payload = self._execute_json(prepared, protocol_name="JSON mode")
+        completed, metadata, payload = self._execute_json(
+            prepared,
+            protocol_name="JSON mode",
+            permission_mode=effective.permission_mode,
+        )
 
         result = GrokJsonRunResult(
             command=metadata,
@@ -236,12 +247,19 @@ class GrokClient:
         stderr = completed.stderr
 
         if completed.returncode != 0:
+            payload = self._stamp(try_parse_grok_json_payload(stdout), metadata)
+            self._raise_if_approval_required(
+                completed,
+                metadata,
+                payload=payload,
+                permission_mode=effective.permission_mode,
+            )
             raise self._build_process_error(
                 metadata,
                 returncode=completed.returncode,
                 stdout=stdout,
                 stderr=stderr,
-                payload=self._stamp(try_parse_grok_json_payload(stdout), metadata),
+                payload=payload,
             )
 
         outcome = classify_grok_structured_stdout(stdout)
@@ -256,12 +274,19 @@ class GrokClient:
             raise error
 
         if outcome.kind == "error":
+            payload = self._stamp(outcome.payload, metadata)
+            self._raise_if_approval_required(
+                completed,
+                metadata,
+                payload=payload,
+                permission_mode=effective.permission_mode,
+            )
             raise self._build_process_error(
                 metadata,
                 returncode=completed.returncode,
                 stdout=stdout,
                 stderr=stderr,
-                payload=self._stamp(outcome.payload, metadata),
+                payload=payload,
             )
 
         if outcome.kind != "validate" and outcome.candidates:
@@ -293,9 +318,9 @@ class GrokClient:
         if outcome.kind != "validate":
             self._raise_structured_failure(
                 outcome,
+                completed=completed,
                 metadata=metadata,
-                stdout=stdout,
-                stderr=stderr,
+                permission_mode=effective.permission_mode,
             )
 
         payload, structured_output = self._validate_structured_candidates(
@@ -488,9 +513,9 @@ class GrokClient:
         self,
         outcome: GrokStructuredOutcome,
         *,
+        completed: CompletedProcess[str],
         metadata: CommandMetadata,
-        stdout: str,
-        stderr: str,
+        permission_mode: GrokPermissionMode | None,
     ) -> NoReturn:
         """Raise the typed error for a structured outcome that yielded no value.
 
@@ -498,9 +523,17 @@ class GrokClient:
         raised as a process error before recovery is attempted, and "validate"
         never reaches here.
         """
+        stdout = completed.stdout
+        stderr = completed.stderr
         payload = self._stamp(outcome.payload, metadata)
 
         if outcome.kind == "cancelled":
+            self._raise_if_approval_required(
+                completed,
+                metadata,
+                payload=payload,
+                permission_mode=permission_mode,
+            )
             cancelled_error = self._build_cancelled_error(
                 metadata,
                 stdout=stdout,
@@ -732,11 +765,18 @@ class GrokClient:
         prepared: PreparedGrokCommand,
         *,
         protocol_name: str,
+        permission_mode: GrokPermissionMode | None,
     ) -> tuple[CompletedProcess[str], CommandMetadata, GrokJsonPayload]:
         completed, metadata = self._execute(prepared)
         stdout = completed.stdout
         stderr = completed.stderr
         payload = self._stamp(try_parse_grok_json_payload(stdout), metadata)
+        self._raise_if_approval_required(
+            completed,
+            metadata,
+            payload=payload,
+            permission_mode=permission_mode,
+        )
 
         if completed.returncode != 0:
             raise self._build_process_error(
@@ -777,6 +817,40 @@ class GrokClient:
             raise cancelled_error
 
         return completed, metadata, payload
+
+    def _raise_if_approval_required(
+        self,
+        completed: CompletedProcess[str],
+        command: CommandMetadata,
+        *,
+        payload: GrokJsonPayload | None,
+        permission_mode: GrokPermissionMode | None,
+    ) -> None:
+        if (
+            permission_mode != "auto"
+            or payload is None
+            or not is_grok_permission_cancellation(payload)
+        ):
+            return
+
+        approval_prompt = payload.text if payload.text is not None else ""
+        self.logger.warning(
+            "Grok run requires approval returncode=%d elapsed_ms=%.0f "
+            "approval_prompt_chars=%d cancellation_category=%s",
+            completed.returncode,
+            command.elapsed_ms,
+            len(approval_prompt),
+            payload.cancellation_category,
+        )
+        raise GrokApprovalRequiredError(
+            "Grok auto mode stopped with an action awaiting approval",
+            approval_prompt=approval_prompt,
+            command=command,
+            returncode=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            payload=payload,
+        )
 
     def _build_cancelled_error(
         self,

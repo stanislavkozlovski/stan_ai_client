@@ -79,6 +79,10 @@ client-side.
 
 By default, Codex runs with `--dangerously-bypass-approvals-and-sandbox`. Set
 `CodexRunOptions(permission_mode="default")` to omit that flag.
+`permission_mode="auto"` selects provider-native automatic review:
+`--permission-mode auto` for Claude and Grok, and `--approve-for-me` for
+Codex. Machine-readable approval stops are normalized through
+`ApprovalRequiredError`; the wrapper does not grant approval or retry.
 
 ### Codex JSON mode
 

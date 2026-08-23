@@ -276,6 +276,70 @@ Grok permission rules and built-in tool filtering are separate APIs:
 `permission_allow_rules` / `permission_deny_rules` map to `--allow` / `--deny`,
 while `tools` / `excluded_tools` map to `--tools` / `--disallowed-tools`.
 
+### Automatic permission review
+
+All three clients expose `permission_mode="auto"` while retaining their
+existing defaults and provider-native permission modes:
+
+```python
+from stan_ai_client import (
+    ApprovalRequiredError,
+    ClaudeCodeClient,
+    CodexClient,
+    CodexRunOptions,
+    GrokClient,
+    GrokRunOptions,
+    RunOptions,
+)
+
+try:
+    result = ClaudeCodeClient().run_json(
+        "Review this repository.",
+        options=RunOptions(permission_mode="auto"),
+    )
+except ApprovalRequiredError as exc:
+    # Preserved verbatim so it can be relayed to the person who can approve.
+    print(exc.approval_prompt)
+
+CodexClient().run_json(
+    "Review this repository.",
+    options=CodexRunOptions(permission_mode="auto"),
+)
+GrokClient().run_json(
+    "Review this repository.",
+    options=GrokRunOptions(permission_mode="auto"),
+)
+```
+
+The stable library option maps to the currently installed CLI vocabulary:
+
+- Claude: `--permission-mode auto` (there is no `--enable-auto-mode` in the
+  installed CLI). Explicit `bypassPermissions` uses
+  `--dangerously-skip-permissions`; auto never adds that flag.
+- Codex: `--approve-for-me`; auto never adds
+  `--dangerously-bypass-approvals-and-sandbox`.
+- Grok: `--permission-mode auto`; auto never selects `bypassPermissions` or
+  `--always-approve`.
+
+Claude and Grok leave the CLI's configured permission posture unchanged when
+`permission_mode` is omitted. Codex retains this package's existing
+`bypassPermissions` default. Claude's `dontAsk` is a separate mode that denies
+unapproved actions without prompting; it is not permission bypass.
+
+When a machine-readable response proves that auto review withheld approval,
+the clients raise `ClaudeApprovalRequiredError`,
+`CodexApprovalRequiredError`, or `GrokApprovalRequiredError`. All inherit from
+`ApprovalRequiredError` and the provider's process-error type. The exception's
+`approval_prompt` is the provider-emitted caller-facing text without stripping
+or rewriting. The library does not prompt on stdin, grant approval, retry, or
+auto-accept; the caller decides how to continue.
+
+Detection is available in Claude JSON and structured modes, Grok JSON and
+structured modes, and Codex JSONL mode. Codex plain-text and structured output
+do not expose the auto-review record needed for safe classification, so those
+modes retain their ordinary process/protocol behavior rather than guessing
+from model prose or multiplexed stderr.
+
 ### Logging
 
 ```python
@@ -362,7 +426,9 @@ from stan_ai_client import (
     __version__,
     ClaudeCodeClient,
     ClaudeEffort,
+    PermissionMode,
     CodexClient,
+    CodexPermissionMode,
     CodexReasoningEffort,
     GrokClient,
     GrokEffort,
@@ -384,6 +450,10 @@ from stan_ai_client import (
     StructuredSchema,
     AIClientError,
     AIClientTimeoutError,
+    ApprovalRequiredError,
+    ClaudeApprovalRequiredError,
+    CodexApprovalRequiredError,
+    GrokApprovalRequiredError,
     ClaudeCodeError,
     CodexCodeError,
     GrokCodeError,
@@ -442,6 +512,7 @@ the selected model.
 - support for Claude CLI flags via typed `RunOptions`
 - support for Codex CLI flags via typed `CodexRunOptions`
 - support for Grok CLI flags via typed `GrokRunOptions`
+- provider-native automatic permission review with typed approval failures
 - raw stdout and stderr preserved on results and errors
 - opt-in stdlib logging with safe default prompt handling
 - typed JSON payload parsing with unknown fields preserved in `extras`
@@ -483,6 +554,8 @@ See [DOCS.md](./DOCS.md) for:
 - Codex JSON mode uses `codex exec --json`
 - Codex structured mode uses `codex exec --output-schema <tempfile>`
 - Codex defaults to `--dangerously-bypass-approvals-and-sandbox`
+- auto permission mode maps to `--permission-mode auto` for Claude/Grok and
+  `--approve-for-me` for Codex
 - Grok uses `grok -p --output-format plain|json` (prompt via arg or --prompt-file transparently)
 - logging uses stdlib `logging`
 - prompts are not written to logs unless `log_prompts=True`
