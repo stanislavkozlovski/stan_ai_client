@@ -44,9 +44,16 @@ def test_legacy_effort_aliases_remain_compatible() -> None:
 
 
 def test_provider_permission_modes_expose_auto() -> None:
-    assert "auto" in get_args(PermissionMode)
+    assert set(get_args(PermissionMode)) == {
+        "acceptEdits",
+        "auto",
+        "bypassPermissions",
+        "default",
+        "dontAsk",
+        "plan",
+    }
     assert get_args(CodexPermissionMode) == ("default", "bypassPermissions", "auto")
-    assert "auto" in get_args(GrokPermissionMode)
+    assert GrokPermissionMode is PermissionMode
 
 
 def test_approval_exception_types_are_public_and_provider_compatible() -> None:

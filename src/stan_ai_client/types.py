@@ -20,14 +20,7 @@ PermissionMode = Literal[
     "auto",
 ]
 CodexPermissionMode = Literal["default", "bypassPermissions", "auto"]
-GrokPermissionMode = Literal[
-    "acceptEdits",
-    "auto",
-    "bypassPermissions",
-    "default",
-    "dontAsk",
-    "plan",
-]
+GrokPermissionMode = PermissionMode
 InputMode = Literal["stdin", "argv"]
 TStructured = TypeVar("TStructured")
 

@@ -30,6 +30,13 @@ the caller's wait budget, logs the wait, and retries the same operation.
 
 ## Execution Flow
 
+### Automatic permission review
+
+Automatic permission review is a non-interactive boundary. When a provider
+exposes a trustworthy machine-readable approval stop, the client raises
+`ApprovalRequiredError`; the wrapper never grants approval, prompts on stdin,
+or retries the withheld action.
+
 ### Grok text / JSON / structured mode
 
 Similar to Claude but using
@@ -79,10 +86,6 @@ client-side.
 
 By default, Codex runs with `--dangerously-bypass-approvals-and-sandbox`. Set
 `CodexRunOptions(permission_mode="default")` to omit that flag.
-`permission_mode="auto"` selects provider-native automatic review:
-`--permission-mode auto` for Claude and Grok, and `--approve-for-me` for
-Codex. Machine-readable approval stops are normalized through
-`ApprovalRequiredError`; the wrapper does not grant approval or retry.
 
 ### Codex JSON mode
 
