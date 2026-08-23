@@ -234,13 +234,16 @@ class CodexClient:
         stderr = completed.stderr
         payload = try_parse_codex_jsonl_payload(stdout)
 
-        if completed.returncode != 0 and payload is None:
-            payload = recover_codex_jsonl_prefix_payload(stdout)
+        approval_payload = payload
+        if approval_payload is None:
+            approval_payload = recover_codex_jsonl_prefix_payload(stdout)
+            if completed.returncode != 0:
+                payload = approval_payload
 
         self._raise_if_approval_required(
             completed,
             metadata,
-            payload=payload,
+            payload=approval_payload,
             permission_mode=effective.permission_mode,
         )
 
@@ -668,17 +671,16 @@ class CodexClient:
         if denial_text is None:
             return
 
-        approval_prompt = payload.result if payload.result is not None else denial_text
         self.logger.warning(
             "Codex run requires approval returncode=%d elapsed_ms=%.0f "
             "approval_prompt_chars=%d",
             completed.returncode,
             command.elapsed_ms,
-            len(approval_prompt),
+            len(denial_text),
         )
         raise CodexApprovalRequiredError(
             "Codex auto mode stopped after automatic review withheld approval",
-            approval_prompt=approval_prompt,
+            approval_prompt=denial_text,
             command=command,
             returncode=completed.returncode,
             stdout=completed.stdout,

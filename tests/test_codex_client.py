@@ -185,14 +185,14 @@ def test_codex_auto_mode_uses_automatic_review_without_bypass(
     assert "--dangerously-bypass-approvals-and-sandbox" not in argv
 
 
-def test_codex_auto_mode_surfaces_verbatim_approval_prompt_from_jsonl(
+def test_codex_auto_mode_uses_native_denial_instead_of_agent_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     denial = (
         "This action was rejected due to unacceptable risk.\n"
         "Reason: command can delete data"
     )
-    approval_prompt = "  I need your approval before I can continue.\nPlease review it.  "
+    agent_message = "  I completed a different action instead.  "
     stdout = "\n".join(
         json.dumps(event)
         for event in (
@@ -207,7 +207,7 @@ def test_codex_auto_mode_surfaces_verbatim_approval_prompt_from_jsonl(
             },
             {
                 "type": "item.completed",
-                "item": {"type": "agent_message", "text": approval_prompt},
+                "item": {"type": "agent_message", "text": agent_message},
             },
             {"type": "turn.completed", "usage": {}},
         )
@@ -226,9 +226,69 @@ def test_codex_auto_mode_surfaces_verbatim_approval_prompt_from_jsonl(
     error = excinfo.value
     assert isinstance(error, ApprovalRequiredError)
     assert isinstance(error, CodexProcessError)
-    assert error.approval_prompt == approval_prompt
+    assert error.approval_prompt == denial
     assert error.returncode == 0
     assert error.stdout == stdout
+
+
+def test_codex_auto_mode_recovers_denial_before_malformed_zero_exit_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    denial = (
+        "This action was rejected due to unacceptable risk.\n"
+        "Reason: command can delete data"
+    )
+    denial_event = {
+        "type": "item.completed",
+        "item": {
+            "type": "command_execution",
+            "status": "declined",
+            "aggregated_output": denial,
+        },
+    }
+    stdout = "\n".join((json.dumps(denial_event), '{"type":"turn.completed"'))
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexApprovalRequiredError) as excinfo:
+        CodexClient().run_json(
+            "remove data",
+            options=CodexRunOptions(permission_mode="auto"),
+        )
+
+    error = excinfo.value
+    assert error.approval_prompt == denial
+    assert error.returncode == 0
+    assert error.stdout == stdout
+    assert error.payload.events == (denial_event,)
+
+
+def test_codex_auto_mode_keeps_other_malformed_zero_exit_output_strict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = "\n".join(
+        (
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "done"},
+                }
+            ),
+            '{"type":"turn.completed"',
+        )
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(CodexProtocolError):
+        CodexClient().run_json(
+            "hello",
+            options=CodexRunOptions(permission_mode="auto"),
+        )
 
 
 def test_codex_auto_mode_does_not_misclassify_unrelated_declined_command(
