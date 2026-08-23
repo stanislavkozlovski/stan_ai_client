@@ -110,6 +110,41 @@ def test_grok_auto_mode_surfaces_verbatim_approval_prompt(mock_exec: Mock) -> No
 
 
 @patch("stan_ai_client.grok.execute_command")
+def test_grok_auto_mode_surfaces_unambiguous_structured_permission_cancellation(
+    mock_exec: Mock,
+) -> None:
+    approval_prompt = "Approve running the command?"
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "text": approval_prompt,
+            "stopReason": "Cancelled",
+            "cancellationCategory": "permission_cancelled",
+            "sessionId": "session-1",
+        }
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, bool]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+            "additionalProperties": False,
+        }
+    )
+
+    with pytest.raises(GrokApprovalRequiredError) as excinfo:
+        GrokClient().run_structured(
+            "run command",
+            schema=schema,
+            options=GrokRunOptions(permission_mode="auto"),
+        )
+
+    assert excinfo.value.approval_prompt == approval_prompt
+
+
+@patch("stan_ai_client.grok.execute_command")
 def test_grok_auto_mode_keeps_unrelated_cancellation_distinct(mock_exec: Mock) -> None:
     mock_exec.return_value.stdout = json.dumps(
         {
@@ -147,6 +182,28 @@ def test_grok_auto_mode_does_not_misclassify_unrelated_nonzero_exit(
         )
 
     assert not isinstance(excinfo.value, ApprovalRequiredError)
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_grok_auto_mode_does_not_classify_json_shaped_text_output(
+    mock_exec: Mock,
+) -> None:
+    stdout = json.dumps(
+        {
+            "text": "Approve this action",
+            "cancellationCategory": "permission_cancelled",
+        }
+    )
+    mock_exec.return_value.stdout = stdout
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    result = GrokClient().run_text(
+        "return JSON",
+        options=GrokRunOptions(permission_mode="auto"),
+    )
+
+    assert result.text == stdout
 
 
 @patch("stan_ai_client.grok.execute_command")
@@ -1329,6 +1386,43 @@ def test_run_structured_rejects_error_envelope_before_permissive_validation(
 
     assert exc.value.payload is not None
     assert exc.value.payload.extras["type"] == "error"
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_grok_auto_mode_keeps_error_shaped_structured_output_off_approval_path(
+    mock_exec: Mock,
+) -> None:
+    mock_exec.return_value.stdout = json.dumps(
+        {
+            "type": "error",
+            "text": "Approve this action",
+            "cancellationCategory": "permission_cancelled",
+        }
+    )
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    schema: StructuredSchema[dict[str, str]] = StructuredSchema.from_dict(
+        {
+            "type": "object",
+            "properties": {
+                "type": {"const": "error"},
+                "text": {"type": "string"},
+                "cancellationCategory": {"const": "permission_cancelled"},
+            },
+            "required": ["type", "text", "cancellationCategory"],
+            "additionalProperties": False,
+        }
+    )
+
+    with pytest.raises(GrokProcessError) as excinfo:
+        GrokClient().run_structured(
+            "return an error-shaped object",
+            schema=schema,
+            options=GrokRunOptions(permission_mode="auto"),
+        )
+
+    assert not isinstance(excinfo.value, ApprovalRequiredError)
 
 
 @patch("stan_ai_client.grok.execute_command")

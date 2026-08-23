@@ -199,6 +199,28 @@ def test_claude_auto_mode_does_not_misclassify_unrelated_nonzero_exit(
     assert not isinstance(excinfo.value, ApprovalRequiredError)
 
 
+def test_claude_auto_mode_does_not_classify_json_shaped_text_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = json.dumps(
+        {
+            "result": "Approve this action",
+            "permission_denials": [{}],
+        }
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    result = ClaudeCodeClient().run_text(
+        "return JSON",
+        options=RunOptions(permission_mode="auto"),
+    )
+
+    assert result.text == stdout
+
+
 def test_claude_permission_denials_do_not_change_dont_ask_behavior(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

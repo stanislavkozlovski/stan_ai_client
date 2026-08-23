@@ -135,12 +135,6 @@ class GrokClient:
         stdout = completed.stdout
         stderr = completed.stderr
         payload = self._stamp(try_parse_grok_json_payload(stdout), metadata)
-        self._raise_if_approval_required(
-            completed,
-            metadata,
-            payload=payload,
-            permission_mode=effective.permission_mode,
-        )
 
         if completed.returncode != 0:
             raise self._build_process_error(
@@ -275,12 +269,9 @@ class GrokClient:
 
         if outcome.kind == "error":
             payload = self._stamp(outcome.payload, metadata)
-            self._raise_if_approval_required(
-                completed,
-                metadata,
-                payload=payload,
-                permission_mode=effective.permission_mode,
-            )
+            # A raw schema value can reuse Grok's error-envelope keys. Keep the
+            # established process-error behavior, but do not relay its text as
+            # provider-owned approval evidence from this ambiguous zero-exit path.
             raise self._build_process_error(
                 metadata,
                 returncode=completed.returncode,

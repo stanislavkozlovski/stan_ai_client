@@ -151,6 +151,23 @@ def test_codex_auto_review_denial_ignores_marker_in_agent_prose() -> None:
     assert codex_auto_review_denial_text(payload) is None
 
 
+def test_codex_auto_review_denial_ignores_marker_in_mcp_failure() -> None:
+    payload = parse_codex_jsonl_payload(
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "mcp_tool_call",
+                    "status": "failed",
+                    "error": {"message": CODEX_AUTO_REVIEW_DENIAL_MARKER},
+                },
+            }
+        )
+    )
+
+    assert codex_auto_review_denial_text(payload) is None
+
+
 def test_summarize_codex_error_text_falls_back_to_bounded_stderr_tail() -> None:
     stderr = "x" * 600 + "\n" + "final diagnostic without markers"
 

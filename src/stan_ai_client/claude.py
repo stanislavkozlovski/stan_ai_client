@@ -116,12 +116,6 @@ class ClaudeCodeClient:
         stdout = completed.stdout
         stderr = completed.stderr
         parsed_payload = try_parse_json_payload(stdout)
-        self._raise_if_approval_required(
-            completed,
-            metadata,
-            payload=parsed_payload,
-            permission_mode=effective.permission_mode,
-        )
 
         if completed.returncode != 0:
             raise self._build_process_error(

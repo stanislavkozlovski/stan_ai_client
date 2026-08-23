@@ -49,9 +49,9 @@ def codex_auto_review_denial_text(payload: CodexJsonPayload | None) -> str | Non
     """Return Codex's verbatim auto-review denial when JSONL proves one occurred.
 
     A generic ``declined`` status can describe unrelated execution failures, so
-    classification also requires Codex's native auto-review marker in the
-    provider-owned command or MCP error field. Agent messages are deliberately
-    not inspected because they can contain untrusted prompt text.
+    classification also requires Codex's native auto-review marker in a
+    provider-owned declined command record. Agent messages and MCP failure text
+    are deliberately not inspected because they can contain untrusted text.
     """
     if payload is None:
         return None
@@ -63,16 +63,12 @@ def codex_auto_review_denial_text(payload: CodexJsonPayload | None) -> str | Non
         if not isinstance(item, dict):
             continue
 
-        candidate: object = None
         if (
-            item.get("type") == "command_execution"
-            and item.get("status") == "declined"
+            item.get("type") != "command_execution"
+            or item.get("status") != "declined"
         ):
-            candidate = item.get("aggregated_output")
-        elif item.get("type") == "mcp_tool_call" and item.get("status") == "failed":
-            error = item.get("error")
-            if isinstance(error, dict):
-                candidate = error.get("message")
+            continue
+        candidate = item.get("aggregated_output")
 
         if (
             isinstance(candidate, str)
