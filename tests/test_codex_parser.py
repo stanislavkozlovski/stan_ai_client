@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from stan_ai_client.codex_parser import (
+    CODEX_AUTO_REVIEW_DENIAL_MARKER,
+    codex_auto_review_denial_text,
     parse_codex_jsonl_payload,
     recover_codex_jsonl_prefix_payload,
     summarize_codex_error_text,
@@ -102,6 +108,54 @@ def test_recover_codex_jsonl_prefix_payload_matches_strict_parse_when_well_forme
     )
 
     assert recover_codex_jsonl_prefix_payload(text) == parse_codex_jsonl_payload(text)
+
+
+def test_codex_auto_review_denial_requires_native_marker_in_declined_item() -> None:
+    denial = f"{CODEX_AUTO_REVIEW_DENIAL_MARKER}\nReason: destructive command"
+    payload = parse_codex_jsonl_payload(
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "command_execution",
+                    "status": "declined",
+                    "aggregated_output": denial,
+                },
+            }
+        )
+    )
+
+    assert codex_auto_review_denial_text(payload) == denial
+
+
+def test_codex_auto_review_denial_ignores_unrelated_declined_item() -> None:
+    payload = parse_codex_jsonl_payload(
+        '{"type":"item.completed","item":{"type":"command_execution",'
+        '"status":"declined","aggregated_output":"process was declined"}}'
+    )
+
+    assert codex_auto_review_denial_text(payload) is None
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"type": "agent_message", "text": CODEX_AUTO_REVIEW_DENIAL_MARKER},
+        {
+            "type": "mcp_tool_call",
+            "status": "failed",
+            "error": {"message": CODEX_AUTO_REVIEW_DENIAL_MARKER},
+        },
+    ],
+)
+def test_codex_auto_review_denial_ignores_marker_outside_declined_commands(
+    item: dict[str, object],
+) -> None:
+    payload = parse_codex_jsonl_payload(
+        json.dumps({"type": "item.completed", "item": item})
+    )
+
+    assert codex_auto_review_denial_text(payload) is None
 
 
 def test_summarize_codex_error_text_falls_back_to_bounded_stderr_tail() -> None:

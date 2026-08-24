@@ -19,14 +19,8 @@ PermissionMode = Literal[
     "plan",
     "auto",
 ]
-CodexPermissionMode = Literal["default", "bypassPermissions"]
-GrokPermissionMode = Literal[
-    "acceptEdits",
-    "bypassPermissions",
-    "default",
-    "dontAsk",
-    "plan",
-]
+CodexPermissionMode = Literal["default", "bypassPermissions", "auto"]
+GrokPermissionMode = PermissionMode
 InputMode = Literal["stdin", "argv"]
 TStructured = TypeVar("TStructured")
 
@@ -150,7 +144,7 @@ class ClaudeJsonPayload:
     structured_output: Any | None
     usage: dict[str, Any]
     model_usage: dict[str, dict[str, Any]]
-    permission_denials: list[str]
+    permission_denials: list[Any]
     uuid: str | None
     extras: dict[str, Any]
     _structured_output_present: bool = field(default=False, repr=False)

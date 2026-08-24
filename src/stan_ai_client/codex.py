@@ -22,12 +22,14 @@ from ._network import (
 )
 from ._retry import run_with_rate_limit_retry
 from .codex_parser import (
+    codex_auto_review_denial_text,
     make_codex_structured_payload,
     recover_codex_jsonl_prefix_payload,
     summarize_codex_error_text,
     try_parse_codex_jsonl_payload,
 )
 from .exceptions import (
+    CodexApprovalRequiredError,
     CodexExecutableNotFoundError,
     CodexNetworkUnavailableError,
     CodexProcessError,
@@ -57,6 +59,7 @@ from .types import (
 DEFAULT_LOGGER = logging.getLogger("stan_ai_client")
 DEFAULT_INPUT_MODE: InputMode = "stdin"
 BYPASS_APPROVALS_AND_SANDBOX_FLAG = "--dangerously-bypass-approvals-and-sandbox"
+APPROVE_FOR_ME_FLAG = "--approve-for-me"
 OUTPUT_SCHEMA_ARG_FLAG = "--output-schema"
 REDACTED_ARG_FLAGS = {
     "-c",
@@ -231,9 +234,20 @@ class CodexClient:
         stderr = completed.stderr
         payload = try_parse_codex_jsonl_payload(stdout)
 
+        approval_payload = payload
+        if approval_payload is None:
+            approval_payload = recover_codex_jsonl_prefix_payload(stdout)
+            if completed.returncode != 0:
+                payload = approval_payload
+
+        self._raise_if_approval_required(
+            completed,
+            metadata,
+            payload=approval_payload,
+            permission_mode=effective.permission_mode,
+        )
+
         if completed.returncode != 0:
-            if payload is None:
-                payload = recover_codex_jsonl_prefix_payload(stdout)
             raise self._build_process_error(
                 metadata,
                 returncode=completed.returncode,
@@ -489,6 +503,8 @@ class CodexClient:
             argv.extend(["-c", f'model_reasoning_effort="{effective.reasoning_effort}"'])
         if effective.permission_mode == "bypassPermissions":
             argv.append(BYPASS_APPROVALS_AND_SANDBOX_FLAG)
+        elif effective.permission_mode == "auto":
+            argv.append(APPROVE_FOR_ME_FLAG)
         if effective.cwd is not None:
             argv.extend(["--cd", str(Path(effective.cwd).resolve())])
         if effective.profile is not None:
@@ -638,6 +654,37 @@ class CodexClient:
             returncode=returncode,
             stdout=stdout,
             stderr=stderr,
+            payload=payload,
+        )
+
+    def _raise_if_approval_required(
+        self,
+        completed: CompletedProcess[str],
+        command: CommandMetadata,
+        *,
+        payload: CodexJsonPayload | None,
+        permission_mode: CodexPermissionMode,
+    ) -> None:
+        if permission_mode != "auto" or payload is None:
+            return
+        denial_text = codex_auto_review_denial_text(payload)
+        if denial_text is None:
+            return
+
+        self.logger.warning(
+            "Codex run requires approval returncode=%d elapsed_ms=%.0f "
+            "approval_prompt_chars=%d",
+            completed.returncode,
+            command.elapsed_ms,
+            len(denial_text),
+        )
+        raise CodexApprovalRequiredError(
+            "Codex auto mode stopped after automatic review withheld approval",
+            approval_prompt=denial_text,
+            command=command,
+            returncode=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
             payload=payload,
         )
 

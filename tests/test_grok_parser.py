@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from stan_ai_client.grok_parser import (
+    is_grok_permission_cancellation,
     parse_grok_json_payload,
     raw_grok_structured_payload,
     summarize_grok_error_text,
@@ -59,6 +60,22 @@ def test_parse_error_envelope() -> None:
     payload = parse_grok_json_payload(text)
     assert payload.text is None
     assert "error" in payload.extras.get("type", "")
+
+
+def test_permission_cancellation_accepts_known_category_spellings() -> None:
+    for category in ("permission_cancelled", "PermissionRejected"):
+        payload = parse_grok_json_payload(
+            json.dumps({"cancellationCategory": category})
+        )
+        assert is_grok_permission_cancellation(payload)
+
+
+def test_permission_cancellation_rejects_unrelated_category() -> None:
+    payload = parse_grok_json_payload(
+        '{"cancellationCategory":"user_cancelled"}'
+    )
+
+    assert not is_grok_permission_cancellation(payload)
 
 
 def test_try_parse_bad_json_returns_none() -> None:

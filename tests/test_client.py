@@ -10,6 +10,8 @@ import pytest
 
 from stan_ai_client import (
     AIClientTimeoutError,
+    ApprovalRequiredError,
+    ClaudeApprovalRequiredError,
     ClaudeCodeError,
     ClaudeCodeClient,
     CommandMetadata,
@@ -107,6 +109,142 @@ def test_run_json_uses_stdin_and_parses_payload(monkeypatch: pytest.MonkeyPatch)
     assert recorder.calls[0]["argv"][:2] == ("claude", "-p")
     assert "--output-format" in recorder.calls[0]["argv"]
     assert "json" in recorder.calls[0]["argv"]
+
+
+def test_claude_permission_modes_map_to_native_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="ok\n", stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+    client = ClaudeCodeClient()
+
+    client.run_text("default")
+    client.run_text(
+        "bypass",
+        options=RunOptions(permission_mode="bypassPermissions"),
+    )
+    client.run_text("auto", options=RunOptions(permission_mode="auto"))
+
+    default_argv = recorder.calls[0]["argv"]
+    bypass_argv = recorder.calls[1]["argv"]
+    auto_argv = recorder.calls[2]["argv"]
+    assert "--permission-mode" not in default_argv
+    assert "--dangerously-skip-permissions" not in default_argv
+    assert "--dangerously-skip-permissions" in bypass_argv
+    assert "--permission-mode" not in bypass_argv
+    assert auto_argv[auto_argv.index("--permission-mode") + 1] == "auto"
+    assert "--dangerously-skip-permissions" not in auto_argv
+
+
+def test_claude_auto_mode_surfaces_verbatim_approval_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approval_prompt = "  Approve Bash(rm /tmp/example)?\nReply yes or no.  "
+    stdout = json.dumps(
+        {
+            "is_error": False,
+            "result": approval_prompt,
+            "permission_denials": [
+                {
+                    "tool_name": "Bash",
+                    "tool_use_id": "tool-1",
+                    "tool_input": {"command": "rm /tmp/example"},
+                }
+            ],
+        }
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(ClaudeApprovalRequiredError) as excinfo:
+        ClaudeCodeClient().run_json(
+            "clean up",
+            options=RunOptions(permission_mode="auto"),
+        )
+
+    error = excinfo.value
+    assert isinstance(error, ApprovalRequiredError)
+    assert isinstance(error, ClaudeProcessError)
+    assert error.approval_prompt == approval_prompt
+    assert error.returncode == 0
+    assert error.stdout == stdout
+    assert error.payload.permission_denials[0]["tool_name"] == "Bash"
+
+
+def test_claude_auto_mode_does_not_misclassify_unrelated_nonzero_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=json.dumps(
+                {"is_error": True, "result": "Approval required for Bash"}
+            ),
+            stderr="",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    with pytest.raises(ClaudeProcessError) as excinfo:
+        ClaudeCodeClient().run_json(
+            "hello",
+            options=RunOptions(permission_mode="auto"),
+        )
+
+    assert not isinstance(excinfo.value, ApprovalRequiredError)
+
+
+def test_claude_auto_mode_does_not_classify_json_shaped_text_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = json.dumps(
+        {
+            "result": "Approve this action",
+            "permission_denials": [{}],
+        }
+    )
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    result = ClaudeCodeClient().run_text(
+        "return JSON",
+        options=RunOptions(permission_mode="auto"),
+    )
+
+    assert result.text == stdout
+
+
+def test_claude_permission_denials_do_not_change_dont_ask_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = RunRecorder(
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "result": "completed without the denied action",
+                    "permission_denials": [{"tool_name": "Bash"}],
+                }
+            ),
+            stderr="",
+        )
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+
+    result = ClaudeCodeClient().run_json(
+        "hello",
+        options=RunOptions(permission_mode="dontAsk"),
+    )
+
+    assert result.payload.result == "completed without the denied action"
 
 
 def test_run_text_can_use_argv_and_extra_flags(monkeypatch: pytest.MonkeyPatch) -> None:

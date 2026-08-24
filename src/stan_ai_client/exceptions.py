@@ -39,6 +39,33 @@ class ProcessError(AIClientError):
         super().__init__(message)
 
 
+class ApprovalRequiredError(ProcessError):
+    """A non-interactive run stopped after the CLI withheld approval."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        approval_prompt: str,
+        command: CommandMetadata,
+        returncode: int,
+        stdout: str,
+        stderr: str,
+        payload: AIPayload | None,
+    ) -> None:
+        # Keep this text byte-for-byte as decoded by subprocess. Callers may
+        # relay it directly, so do not strip, summarize, or otherwise normalize.
+        self.approval_prompt = approval_prompt
+        super().__init__(
+            message,
+            command=command,
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+            payload=payload,
+        )
+
+
 class NetworkUnavailableError(ProcessError):
     """Strong evidence that a provider transport was unavailable."""
 
@@ -146,6 +173,10 @@ class ClaudeProcessError(ProcessError, ClaudeCodeError):
     payload: ClaudeJsonPayload | None
 
 
+class ClaudeApprovalRequiredError(ApprovalRequiredError, ClaudeProcessError):
+    payload: ClaudeJsonPayload
+
+
 class ClaudeNetworkUnavailableError(NetworkUnavailableError, ClaudeProcessError):
     payload: ClaudeJsonPayload | None
 
@@ -230,6 +261,10 @@ class CodexTimeoutError(AIClientTimeoutError, CodexCodeError):
 
 class CodexProcessError(ProcessError, CodexCodeError):
     payload: CodexJsonPayload | None
+
+
+class CodexApprovalRequiredError(ApprovalRequiredError, CodexProcessError):
+    payload: CodexJsonPayload
 
 
 class CodexNetworkUnavailableError(NetworkUnavailableError, CodexProcessError):
@@ -319,6 +354,12 @@ class _GrokPayloadMetadata:
     @property
     def cancellation_category(self) -> str | None:
         return None if self.payload is None else self.payload.cancellation_category
+
+
+class GrokApprovalRequiredError(
+    _GrokPayloadMetadata, ApprovalRequiredError, GrokProcessError
+):
+    payload: GrokJsonPayload
 
 
 class GrokProtocolError(_GrokPayloadMetadata, ProtocolError, GrokCodeError):

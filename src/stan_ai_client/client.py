@@ -8,6 +8,8 @@ from .claude import (
     ResolvedRunOptions,
 )
 from .exceptions import (
+    ApprovalRequiredError,
+    ClaudeApprovalRequiredError,
     ClaudeExecutableNotFoundError,
     ClaudeNetworkUnavailableError,
     ClaudeProcessError,
@@ -34,6 +36,8 @@ from .types import (
 )
 
 __all__ = [
+    "ApprovalRequiredError",
+    "ClaudeApprovalRequiredError",
     "ClaudeExecutableNotFoundError",
     "ClaudeCodeClient",
     "ClaudeEffort",

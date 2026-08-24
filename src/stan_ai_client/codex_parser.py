@@ -11,6 +11,9 @@ CODEX_ERROR_EVENT_TYPES = frozenset({"error", "turn.failed"})
 ``error`` field and network classification select events through this set."""
 
 _CODEX_JSONL_PARSE_ERRORS = (TypeError, ValueError, json.JSONDecodeError)
+CODEX_AUTO_REVIEW_DENIAL_MARKER = (
+    "This action was rejected due to unacceptable risk."
+)
 
 
 def parse_codex_jsonl_payload(text: str) -> CodexJsonPayload:
@@ -40,6 +43,37 @@ def recover_codex_jsonl_prefix_payload(text: str) -> CodexJsonPayload | None:
     if not events:
         return None
     return _make_codex_jsonl_payload(events)
+
+
+def codex_auto_review_denial_text(payload: CodexJsonPayload) -> str | None:
+    """Return Codex's verbatim auto-review denial when JSONL proves one occurred.
+
+    A generic ``declined`` status can describe unrelated execution failures, so
+    classification also requires Codex's native auto-review marker in a
+    provider-owned declined command record. Agent messages and MCP failure text
+    are deliberately not inspected because they can contain untrusted text.
+    """
+    for event in payload.events:
+        if event.get("type") != "item.completed":
+            continue
+        item = event.get("item")
+        if not isinstance(item, dict):
+            continue
+
+        if (
+            item.get("type") != "command_execution"
+            or item.get("status") != "declined"
+        ):
+            continue
+        candidate = item.get("aggregated_output")
+
+        if (
+            isinstance(candidate, str)
+            and CODEX_AUTO_REVIEW_DENIAL_MARKER in candidate
+        ):
+            return candidate
+
+    return None
 
 
 def _iter_codex_jsonl_events(text: str) -> Iterator[dict[str, Any]]:

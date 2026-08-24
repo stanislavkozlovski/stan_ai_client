@@ -17,6 +17,7 @@ from ._network import (
 )
 from ._retry import run_with_rate_limit_retry
 from .exceptions import (
+    ClaudeApprovalRequiredError,
     ClaudeExecutableNotFoundError,
     ClaudeNetworkUnavailableError,
     ClaudeProcessError,
@@ -49,6 +50,7 @@ REDACTED_ARG_FLAGS = {
     "--system-prompt",
 }
 JSON_SCHEMA_ARG_FLAG = "--json-schema"
+DANGEROUSLY_SKIP_PERMISSIONS_FLAG = "--dangerously-skip-permissions"
 TRun = TypeVar("TRun")
 TStructured = TypeVar("TStructured")
 
@@ -164,7 +166,11 @@ class ClaudeCodeClient:
     def _run_json_once(self, prompt: str, *, options: RunOptions | None = None) -> JsonRunResult:
         prepared, effective = self._prepare(prompt, output_format="json", options=options)
         self._log_start(prompt, output_format="json", prepared=prepared, effective=effective)
-        completed, metadata, payload = self._execute_json(prepared, protocol_name="JSON mode")
+        completed, metadata, payload = self._execute_json(
+            prepared,
+            protocol_name="JSON mode",
+            permission_mode=effective.permission_mode,
+        )
 
         result = JsonRunResult(
             command=metadata,
@@ -214,6 +220,7 @@ class ClaudeCodeClient:
         completed, metadata, payload = self._execute_json(
             prepared,
             protocol_name="structured mode",
+            permission_mode=effective.permission_mode,
         )
 
         if not payload.has_structured_output:
@@ -313,7 +320,9 @@ class ClaudeCodeClient:
             argv.extend(["--disallowed-tools", ",".join(effective.disallowed_tools)])
         if effective.tools is not None:
             argv.extend(["--tools", ",".join(effective.tools)])
-        if effective.permission_mode is not None:
+        if effective.permission_mode == "bypassPermissions":
+            argv.append(DANGEROUSLY_SKIP_PERMISSIONS_FLAG)
+        elif effective.permission_mode is not None:
             argv.extend(["--permission-mode", effective.permission_mode])
         if effective.system_prompt is not None:
             argv.extend(["--system-prompt", effective.system_prompt])
@@ -352,11 +361,18 @@ class ClaudeCodeClient:
         prepared: PreparedCommand,
         *,
         protocol_name: str,
+        permission_mode: str | None,
     ) -> tuple[CompletedProcess[str], CommandMetadata, ClaudeJsonPayload]:
         completed, metadata = self._execute(prepared)
         stdout = completed.stdout
         stderr = completed.stderr
         payload = try_parse_json_payload(stdout)
+        self._raise_if_approval_required(
+            completed,
+            metadata,
+            payload=payload,
+            permission_mode=permission_mode,
+        )
 
         if completed.returncode != 0:
             raise self._build_process_error(
@@ -387,6 +403,40 @@ class ClaudeCodeClient:
             )
 
         return completed, metadata, payload
+
+    def _raise_if_approval_required(
+        self,
+        completed: CompletedProcess[str],
+        command: CommandMetadata,
+        *,
+        payload: ClaudeJsonPayload | None,
+        permission_mode: str | None,
+    ) -> None:
+        if (
+            permission_mode != "auto"
+            or payload is None
+            or not payload.permission_denials
+        ):
+            return
+
+        approval_prompt = payload.result if payload.result is not None else ""
+        self.logger.warning(
+            "Claude run requires approval returncode=%d elapsed_ms=%.0f "
+            "approval_prompt_chars=%d permission_denials=%d",
+            completed.returncode,
+            command.elapsed_ms,
+            len(approval_prompt),
+            len(payload.permission_denials),
+        )
+        raise ClaudeApprovalRequiredError(
+            "Claude auto mode stopped with an action awaiting approval",
+            approval_prompt=approval_prompt,
+            command=command,
+            returncode=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            payload=payload,
+        )
 
     def _execute(
         self, prepared: PreparedCommand

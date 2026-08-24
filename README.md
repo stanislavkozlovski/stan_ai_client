@@ -276,6 +276,31 @@ Grok permission rules and built-in tool filtering are separate APIs:
 `permission_allow_rules` / `permission_deny_rules` map to `--allow` / `--deny`,
 while `tools` / `excluded_tools` map to `--tools` / `--disallowed-tools`.
 
+### Automatic permission review
+
+All three clients accept `permission_mode="auto"`. Approval stops remain
+non-interactive and surface through the provider-neutral error type:
+
+```python
+from stan_ai_client import (
+    ApprovalRequiredError,
+    ClaudeCodeClient,
+    RunOptions,
+)
+
+try:
+    ClaudeCodeClient().run_json(
+        "Review this repository.",
+        options=RunOptions(permission_mode="auto"),
+    )
+except ApprovalRequiredError as exc:
+    print(exc.approval_prompt)
+```
+
+See [Automatic permission review](./DOCS.md#automatic-permission-review) for
+provider flags and defaults, concrete exception types, prompt-preservation
+guarantees, and the supported detection modes.
+
 ### Logging
 
 ```python
@@ -362,7 +387,9 @@ from stan_ai_client import (
     __version__,
     ClaudeCodeClient,
     ClaudeEffort,
+    PermissionMode,
     CodexClient,
+    CodexPermissionMode,
     CodexReasoningEffort,
     GrokClient,
     GrokEffort,
@@ -384,6 +411,10 @@ from stan_ai_client import (
     StructuredSchema,
     AIClientError,
     AIClientTimeoutError,
+    ApprovalRequiredError,
+    ClaudeApprovalRequiredError,
+    CodexApprovalRequiredError,
+    GrokApprovalRequiredError,
     ClaudeCodeError,
     CodexCodeError,
     GrokCodeError,
@@ -442,6 +473,7 @@ the selected model.
 - support for Claude CLI flags via typed `RunOptions`
 - support for Codex CLI flags via typed `CodexRunOptions`
 - support for Grok CLI flags via typed `GrokRunOptions`
+- provider-native automatic permission review with typed approval failures
 - raw stdout and stderr preserved on results and errors
 - opt-in stdlib logging with safe default prompt handling
 - typed JSON payload parsing with unknown fields preserved in `extras`

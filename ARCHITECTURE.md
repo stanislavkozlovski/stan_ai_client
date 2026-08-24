@@ -30,6 +30,13 @@ the caller's wait budget, logs the wait, and retries the same operation.
 
 ## Execution Flow
 
+### Automatic permission review
+
+Automatic permission review is a non-interactive boundary. When a provider
+exposes a trustworthy machine-readable approval stop, the client raises
+`ApprovalRequiredError`; the wrapper never grants approval, prompts on stdin,
+or retries the withheld action.
+
 ### Grok text / JSON / structured mode
 
 Similar to Claude but using
