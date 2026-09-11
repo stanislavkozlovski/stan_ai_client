@@ -539,7 +539,7 @@ the validated structured result; `.stdout` contains raw JSONL and `.payload`
 retains thread ID, usage, and decoded events. `usage_diagnostics` describes
 missing or malformed event data. A valid final answer still succeeds when
 accounting is unavailable. Terminal provider failures retain typed errors;
-timeouts retain partial stdout/stderr and a recovered payload in this mode.
+timeouts retain partial stdout/stderr, and in this mode also a recovered payload.
 Result and schema files are cleaned up on every exit. Default structured,
 text, and JSON calls keep their existing protocols.
 

@@ -411,13 +411,16 @@ def test_accounting_parser_keeps_later_failures_and_last_terminal_only() -> None
         + "broken\n"
         + stream({"type": "turn.completed"}, {"type": "turn.failed"})
     )
-    payload = parse_codex_usage_payload(text, usage_scope="invocation")
+    payload, provider_failed = parse_codex_usage_payload(text, usage_scope="invocation")
+    assert provider_failed
     assert payload.usage == {}
     assert payload.usage_scope == "invocation"
     assert payload.events[-1]["type"] == "turn.failed"
     assert payload.usage_diagnostics
     assert try_parse_codex_jsonl_payload(text) is None
-    duplicated = parse_codex_usage_payload(
+    duplicated, provider_failed = parse_codex_usage_payload(
         SUCCESS + SUCCESS, usage_scope="invocation"
     )
+    assert not provider_failed
+    assert duplicated.usage_diagnostics == ()
     assert normalize_ai_usage("codex", duplicated).tokens.total_tokens == 1200

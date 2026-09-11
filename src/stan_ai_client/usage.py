@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field, fields, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Literal
 
 from .types import ClaudeJsonPayload, CodexJsonPayload, GrokJsonPayload
@@ -109,11 +109,7 @@ def normalize_ai_usage(
     return replace(
         facts,
         raw=raw,
-        diagnostics=tuple(
-            dict.fromkeys(
-                (*facts.diagnostics, "invocation delta from cumulative baseline")
-            )
-        ),
+        diagnostics=(*facts.diagnostics, "invocation delta from cumulative baseline"),
     )
 
 
@@ -128,13 +124,12 @@ def _raw_payload(payload: UsagePayload) -> dict[str, Any]:
 
 
 def _normalize(provider: str, raw: dict[str, Any]) -> UsageFacts:
-    diagnostics: list[str] = []
-    raw_diagnostics = raw.get("usage_diagnostics", ())
-    for diagnostic in (
-        raw_diagnostics if isinstance(raw_diagnostics, (tuple, list)) else ()
-    ):
-        if isinstance(diagnostic, str):
-            diagnostics.append(diagnostic)
+    raw_diagnostics = raw.get("usage_diagnostics")
+    diagnostics = (
+        [item for item in raw_diagnostics if isinstance(item, str)]
+        if isinstance(raw_diagnostics, (tuple, list))
+        else []
+    )
     session = _session_id(raw)
     usage = _mapping(raw.get("usage"))
     model = _text(raw.get("model"))
@@ -143,30 +138,13 @@ def _normalize(provider: str, raw: dict[str, Any]) -> UsageFacts:
         tokens = _codex_tokens(usage, diagnostics)
     elif provider == "claude":
         model_usage = _mapping(raw.get("modelUsage"))
-        for name, value in sorted(model_usage.items(), key=lambda item: str(item[0])):
-            if not isinstance(value, Mapping):
-                diagnostics.append("invalid Claude model usage row")
-                rows.append(
-                    ModelUsage(
-                        name if isinstance(name, str) else None,
-                        "reported" if isinstance(name, str) else "unknown",
-                        TokenUsage(),
-                    )
-                )
-                continue
-            row_tokens = _claude_tokens(value, diagnostics, camel=True)
-            model_name = name if isinstance(name, str) else None
-            if model_name is None:
-                diagnostics.append("invalid Claude model usage row")
-            rows.append(
-                ModelUsage(
-                    model_name,
-                    "reported" if model_name is not None else "unknown",
-                    row_tokens,
-                    _cost(value.get("costUSD"), diagnostics, f"{name}.costUSD"),
-                )
+        rows = [
+            _claude_model_row(name, value, diagnostics)
+            for name, value in sorted(
+                model_usage.items(), key=lambda item: str(item[0])
             )
-        if any(_has_counts(row.tokens) for row in rows):
+        ]
+        if any(row.tokens != TokenUsage() for row in rows):
             tokens = _sum_rows(rows, diagnostics)
         else:
             tokens = _claude_tokens(usage or raw, diagnostics, camel=False)
@@ -180,13 +158,13 @@ def _normalize(provider: str, raw: dict[str, Any]) -> UsageFacts:
         diagnostics.append("only legacy aggregate usage is supported")
     if not rows:
         requested = _text(raw.get("requested_model"))
-        source: Literal["reported", "requested", "unknown"] = (
-            "reported" if model else "requested" if requested else "unknown"
-        )
-        # Do not attribute a failed multi-model breakdown to a single hint.
-        if provider == "claude" and len(_mapping(raw.get("modelUsage"))) > 1:
-            model, requested, source = None, None, "unknown"
-        rows = [ModelUsage(model or requested, source, tokens)]
+        rows = [
+            ModelUsage(
+                model or requested,
+                "reported" if model else "requested" if requested else "unknown",
+                tokens,
+            )
+        ]
     if tokens.total_tokens is None:
         diagnostics.append("total tokens unavailable")
     return UsageFacts(
@@ -238,6 +216,27 @@ def _codex_usage_delta(
             raise ValueError("counter reset or invalid value")
         delta[name] = now - before
     return delta
+
+
+def _claude_model_row(name: Any, value: Any, diagnostics: list[str]) -> ModelUsage:
+    """Every ``modelUsage`` entry becomes exactly one row. A malformed entry
+    keeps its identity with unavailable tokens, so it still blocks a complete
+    invocation total, and a reported breakdown never falls back to a single
+    ``requested_model`` hint."""
+    model = name if isinstance(name, str) else None
+    source: Literal["reported", "unknown"] = (
+        "reported" if model is not None else "unknown"
+    )
+    if model is None or not isinstance(value, Mapping):
+        diagnostics.append("invalid Claude model usage row")
+    if not isinstance(value, Mapping):
+        return ModelUsage(model, source, TokenUsage())
+    return ModelUsage(
+        model,
+        source,
+        _claude_tokens(value, diagnostics, camel=True),
+        _cost(value.get("costUSD"), diagnostics, f"{name}.costUSD"),
+    )
 
 
 def _claude_tokens(
@@ -303,38 +302,28 @@ def _allocate(
 
 
 def _sum_rows(rows: list[ModelUsage], diagnostics: list[str]) -> TokenUsage:
-    values = {
-        item.name: _sum_complete(
-            [getattr(row.tokens, item.name) for row in rows], diagnostics
-        )
-        for item in fields(TokenUsage)
-    }
-    # A category missing in one model cannot erase the other model's allocation.
-    # Keep known amounts in that category; any unknown remainder stays unsplit.
-    for name in (
-        "fresh_input_tokens",
-        "cache_read_input_tokens",
-        "cache_write_input_tokens",
-        "output_tokens",
-    ):
+    """Count each model once. A component missing from one row cannot erase the
+    others' known amounts, and the invocation total exists only when every row
+    has one; the same allocator that built each row then keeps any remainder
+    unsplit."""
+
+    def known_sum(name: str) -> int | None:
         known = [
             getattr(row.tokens, name)
             for row in rows
             if getattr(row.tokens, name) is not None
         ]
-        values[name] = _sum_complete(known, diagnostics) if known else None
-    if values["total_tokens"] is not None:
-        allocated = sum(
-            values[name] or 0
-            for name in (
-                "fresh_input_tokens",
-                "cache_read_input_tokens",
-                "cache_write_input_tokens",
-                "output_tokens",
-            )
-        )
-        values["unsplit_tokens"] = values["total_tokens"] - allocated
-    return TokenUsage(**values)
+        return _sum_complete(known, diagnostics) if known else None
+
+    return _allocate(
+        known_sum("fresh_input_tokens"),
+        known_sum("cache_read_input_tokens"),
+        known_sum("cache_write_input_tokens"),
+        known_sum("output_tokens"),
+        None,
+        _sum_complete([row.tokens.total_tokens for row in rows], diagnostics),
+        diagnostics,
+    )
 
 
 def _count(value: Any, diagnostics: list[str], name: str) -> int | None:
@@ -379,10 +368,6 @@ def _unavailable(facts: UsageFacts, diagnostic: str) -> UsageFacts:
         ),
         diagnostics=(*facts.diagnostics, diagnostic),
     )
-
-
-def _has_counts(tokens: TokenUsage) -> bool:
-    return any(getattr(tokens, item.name) is not None for item in fields(TokenUsage))
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

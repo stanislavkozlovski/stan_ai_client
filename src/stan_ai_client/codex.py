@@ -23,7 +23,6 @@ from ._network import (
 from ._retry import run_with_rate_limit_retry
 from .codex_parser import (
     codex_auto_review_denial_text,
-    codex_usage_has_terminal_error,
     make_codex_structured_payload,
     parse_codex_usage_payload,
     recover_codex_jsonl_prefix_payload,
@@ -358,6 +357,8 @@ class CodexClient:
         self._log_start(prompt, output_format="structured", prepared=prepared, effective=effective)
         self.logger.debug("Codex structured mode enabled schema_validated_locally=True")
 
+        # A result file means usage capture: stdout is JSONL, and a resumed
+        # session reports cumulative counters.
         usage_scope: Literal["invocation", "cumulative"] | None = None
         if output_last_message_path is not None:
             usage_scope = (
@@ -370,27 +371,30 @@ class CodexClient:
         )
         stdout = completed.stdout
         stderr = completed.stderr
-        payload = (
-            parse_codex_usage_payload(stdout, usage_scope=usage_scope)
-            if usage_scope is not None
-            else make_codex_structured_payload(None, structured_output_present=False)
-        )
-        if usage_scope is not None:
+
+        if usage_scope is None:
+            output_protocol: CodexOutputProtocol = "unstructured"
+            payload = make_codex_structured_payload(None, structured_output_present=False)
+            provider_failed = False
+        else:
+            output_protocol = "jsonl"
+            payload, provider_failed = parse_codex_usage_payload(
+                stdout, usage_scope=usage_scope
+            )
             self._raise_if_approval_required(
                 completed, metadata, payload=payload,
                 permission_mode=effective.permission_mode,
             )
 
-        if completed.returncode != 0 or (
-            usage_scope is not None and codex_usage_has_terminal_error(payload)
-        ):
+        if completed.returncode != 0 or provider_failed:
             raise self._build_process_error(
                 metadata,
                 returncode=completed.returncode,
                 stdout=stdout,
                 stderr=stderr,
+                # Default structured mode has no provider payload to classify.
                 payload=payload if usage_scope is not None else None,
-                output_protocol="jsonl" if usage_scope is not None else "unstructured",
+                output_protocol=output_protocol,
             )
 
         final_text = stdout
@@ -621,21 +625,18 @@ class CodexClient:
                 _redact_argv(prepared.argv, prompt_in_argv=_prompt_in_argv(prepared)),
                 metadata.elapsed_ms,
             )
-            stdout = (
-                _timeout_text(exc.stdout) if captured_usage_scope is not None else ""
-            )
-            stderr = (
-                _timeout_text(exc.stderr) if captured_usage_scope is not None else ""
-            )
+            stdout = _timeout_text(exc.stdout)
+            payload: CodexJsonPayload | None = None
+            if captured_usage_scope is not None:
+                payload, _ = parse_codex_usage_payload(
+                    stdout, usage_scope=captured_usage_scope
+                )
             raise CodexTimeoutError(
-                metadata, prepared.timeout_seconds, stdout=stdout, stderr=stderr,
-                payload=(
-                    parse_codex_usage_payload(
-                        stdout, usage_scope=captured_usage_scope
-                    )
-                    if captured_usage_scope is not None
-                    else None
-                ),
+                metadata,
+                prepared.timeout_seconds,
+                stdout=stdout,
+                stderr=_timeout_text(exc.stderr),
+                payload=payload,
             ) from exc
 
         metadata = CommandMetadata(
