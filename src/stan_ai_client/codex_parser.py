@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from dataclasses import replace
 from typing import Any
 
 from .types import CodexJsonPayload
@@ -43,6 +44,46 @@ def recover_codex_jsonl_prefix_payload(text: str) -> CodexJsonPayload | None:
     if not events:
         return None
     return _make_codex_jsonl_payload(events)
+
+
+def parse_codex_usage_payload(text: str) -> CodexJsonPayload:
+    """Best-effort accounting for structured capture, independent of the answer.
+
+    Scan past bad lines so a later provider failure is still visible. Strict
+    ``run_json`` parsing deliberately does not use this recovery policy.
+    """
+    events: list[dict[str, Any]] = []
+    diagnostics: list[str] = []
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            events.append(_parse_codex_jsonl_event(line))
+        except (*_CODEX_JSONL_PARSE_ERRORS, RecursionError):
+            diagnostics.append(f"invalid JSONL event at line {number}")
+    payload = _make_codex_jsonl_payload(events)
+    terminals = [event for event in events if event["type"] == "turn.completed"]
+    # Use the last terminal exactly once, including when its usage is absent.
+    usage = terminals[-1].get("usage") if terminals else None
+    if not isinstance(usage, dict) or not usage:
+        diagnostics.append("terminal usage unavailable")
+    if len(terminals) > 1 and any(event != terminals[-1] for event in terminals):
+        diagnostics.append("multiple terminal snapshots; using the last")
+    return replace(
+        payload,
+        usage=usage if isinstance(usage, dict) else {},
+        usage_diagnostics=tuple(diagnostics),
+    )
+
+
+def codex_usage_has_terminal_error(payload: CodexJsonPayload) -> bool:
+    terminal: str | None = None
+    for event in payload.events:
+        if event["type"] == "turn.failed":
+            return True
+        if event["type"] in {"error", "turn.completed"}:
+            terminal = event["type"]
+    return terminal == "error"
 
 
 def codex_auto_review_denial_text(payload: CodexJsonPayload) -> str | None:

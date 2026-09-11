@@ -1,0 +1,30 @@
+{
+  "cli_version": "codex-cli 0.154.0",
+  "client_version": "0.1.15 + opt-in capture changes",
+  "observed_on": "2026-09-11",
+  "note": "Two live structured replies containing the same tiny JSON object. Session identity sanitized; provider counters retained.",
+  "fresh": {
+    "thread_id": "smoke-session",
+    "usage_scope": "invocation",
+    "snapshot_sequence": 0,
+    "usage": {
+      "input_tokens": 17485,
+      "cached_input_tokens": 0,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 15,
+      "reasoning_output_tokens": 0
+    }
+  },
+  "resume": {
+    "thread_id": "smoke-session",
+    "usage_scope": "cumulative",
+    "snapshot_sequence": 1,
+    "usage": {
+      "input_tokens": 35001,
+      "cached_input_tokens": 17280,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 30,
+      "reasoning_output_tokens": 0
+    }
+  }
+}
