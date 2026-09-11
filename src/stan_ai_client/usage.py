@@ -149,6 +149,8 @@ def _normalize(provider: str, raw: dict[str, Any]) -> UsageFacts:
         else:
             tokens = _claude_tokens(usage or raw, diagnostics, camel=False)
             diagnostics.append("Claude model attribution incomplete")
+            if rows and tokens != TokenUsage():
+                rows.append(ModelUsage(None, "unknown", tokens))
     elif provider == "grok":
         tokens = TokenUsage()
         diagnostics.append("provider does not expose token usage")

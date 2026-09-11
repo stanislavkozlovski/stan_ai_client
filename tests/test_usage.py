@@ -221,7 +221,7 @@ def test_partial_claude_top_level_usage_does_not_invent_a_total() -> None:
     assert facts.raw["usage"]["reasoning_output_tokens"] == 5
 
 
-def test_unusable_models_keep_identity_without_token_attribution() -> None:
+def test_unusable_models_allocate_fallback_tokens_to_unknown_model() -> None:
     facts = normalize_ai_usage(
         "claude",
         {
@@ -236,15 +236,17 @@ def test_unusable_models_keep_identity_without_token_attribution() -> None:
         },
     )
     assert facts.tokens == TokenUsage(123, 0, 0, 0, None, 0, 123)
-    assert [row.model for row in facts.models] == ["a", "b"]
-    assert all(row.tokens == TokenUsage() for row in facts.models)
+    assert [row.model for row in facts.models] == ["a", "b", None]
+    assert all(row.tokens == TokenUsage() for row in facts.models[:2])
+    assert facts.models[2].model_source == "unknown"
+    assert facts.models[2].tokens == facts.tokens
 
 
 def test_top_level_fallback_retains_reported_model_identity_and_cost() -> None:
     facts = normalize_ai_usage(
         "claude",
         {
-            "modelUsage": {"a": {"costUSD": 0.25}},
+            "modelUsage": {"a": {"costUSD": 0.25}, "b": {}},
             "usage": {
                 "input_tokens": 10,
                 "cache_read_input_tokens": 20,
@@ -254,11 +256,17 @@ def test_top_level_fallback_retains_reported_model_identity_and_cost() -> None:
         },
     )
     assert facts.tokens == TokenUsage(10, 20, 0, 30, None, 0, 60)
-    assert len(facts.models) == 1
+    assert len(facts.models) == 3
     assert facts.models[0].model == "a"
     assert facts.models[0].model_source == "reported"
     assert facts.models[0].tokens == TokenUsage()
     assert facts.models[0].reported_cost_usd == 0.25
+    assert facts.models[1].model == "b"
+    assert facts.models[1].tokens == TokenUsage()
+    assert facts.models[2].model is None
+    assert facts.models[2].model_source == "unknown"
+    assert facts.models[2].tokens == facts.tokens
+    assert sum(row.tokens.total_tokens or 0 for row in facts.models) == 60
 
 
 @pytest.mark.parametrize("value", [True, -1, float("inf"), float("nan"), "1", 10**1000])

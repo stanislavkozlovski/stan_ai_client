@@ -677,9 +677,9 @@ the smaller top-level `usage` envelope. Only its documented `inputTokens`,
 or malformed breakdown preserves known components but has no computed total.
 Reported model names and costs remain available even when their token counters
 are unusable. If no model has usable counters, whole-call facts fall back to
-available top-level usage without assigning those tokens to a model row, with
-an attribution diagnostic. Codex input includes cached input and output includes
-reasoning:
+available top-level usage and assign those tokens to an additional unknown-model
+row, with an attribution diagnostic. Codex input includes cached input and output
+includes reasoning:
 1,000 input, 800 cached, and 200 output yield 200 fresh + 800 cached + 200 output
 = 1,200 total. Invalid cache splits preserve an independently valid total as
 partly unsplit. Legacy `total_tokens` stays unsplit; Grok currently exposes
