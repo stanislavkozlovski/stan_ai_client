@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
-from typing import Any, Callable, Mapping, TypeVar
+from typing import Any, Callable, Literal, Mapping, TypeVar
 from urllib.parse import unquote
 
 from jsonschema.exceptions import ValidationError
@@ -358,35 +358,39 @@ class CodexClient:
         self._log_start(prompt, output_format="structured", prepared=prepared, effective=effective)
         self.logger.debug("Codex structured mode enabled schema_validated_locally=True")
 
+        usage_scope: Literal["invocation", "cumulative"] | None = None
+        if output_last_message_path is not None:
+            usage_scope = (
+                "cumulative"
+                if effective.session_id is not None or effective.continue_last_session
+                else "invocation"
+            )
         completed, metadata = self._execute(
-            prepared, capture_usage=output_last_message_path is not None
+            prepared, captured_usage_scope=usage_scope
         )
         stdout = completed.stdout
         stderr = completed.stderr
         payload = (
-            parse_codex_usage_payload(stdout) if output_last_message_path is not None
+            parse_codex_usage_payload(stdout, usage_scope=usage_scope)
+            if usage_scope is not None
             else make_codex_structured_payload(None, structured_output_present=False)
         )
-        if output_last_message_path is not None:
-            payload = replace(payload, usage_scope=(
-                "cumulative" if effective.session_id is not None or effective.continue_last_session
-                else "invocation"
-            ))
+        if usage_scope is not None:
             self._raise_if_approval_required(
                 completed, metadata, payload=payload,
                 permission_mode=effective.permission_mode,
             )
 
         if completed.returncode != 0 or (
-            output_last_message_path is not None and codex_usage_has_terminal_error(payload)
+            usage_scope is not None and codex_usage_has_terminal_error(payload)
         ):
             raise self._build_process_error(
                 metadata,
                 returncode=completed.returncode,
                 stdout=stdout,
                 stderr=stderr,
-                payload=payload if output_last_message_path is not None else None,
-                output_protocol="jsonl" if output_last_message_path is not None else "unstructured",
+                payload=payload if usage_scope is not None else None,
+                output_protocol="jsonl" if usage_scope is not None else "unstructured",
             )
 
         final_text = stdout
@@ -577,7 +581,10 @@ class CodexClient:
                 argv.extend(["--add-dir", str(directory)])
 
     def _execute(
-        self, prepared: PreparedCommand, *, capture_usage: bool = False
+        self,
+        prepared: PreparedCommand,
+        *,
+        captured_usage_scope: Literal["invocation", "cumulative"] | None = None,
     ) -> tuple[CompletedProcess[str], CommandMetadata]:
         started_at = time.monotonic()
         try:
@@ -614,11 +621,21 @@ class CodexClient:
                 _redact_argv(prepared.argv, prompt_in_argv=_prompt_in_argv(prepared)),
                 metadata.elapsed_ms,
             )
-            stdout = _timeout_text(exc.stdout) if capture_usage else ""
-            stderr = _timeout_text(exc.stderr) if capture_usage else ""
+            stdout = (
+                _timeout_text(exc.stdout) if captured_usage_scope is not None else ""
+            )
+            stderr = (
+                _timeout_text(exc.stderr) if captured_usage_scope is not None else ""
+            )
             raise CodexTimeoutError(
                 metadata, prepared.timeout_seconds, stdout=stdout, stderr=stderr,
-                payload=parse_codex_usage_payload(stdout) if capture_usage else None,
+                payload=(
+                    parse_codex_usage_payload(
+                        stdout, usage_scope=captured_usage_scope
+                    )
+                    if captured_usage_scope is not None
+                    else None
+                ),
             ) from exc
 
         metadata = CommandMetadata(

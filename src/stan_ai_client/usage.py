@@ -16,6 +16,14 @@ from typing import Any, Literal
 from .types import ClaudeJsonPayload, CodexJsonPayload, GrokJsonPayload
 
 _MAX_COUNT = 2**63 - 1
+_CODEX_TOKEN_COUNTERS = (
+    "input_tokens",
+    "cached_input_tokens",
+    "cache_write_input_tokens",
+    "output_tokens",
+    "reasoning_output_tokens",
+    "total_tokens",
+)
 UsagePayload = (
     Mapping[str, Any] | ClaudeJsonPayload | CodexJsonPayload | GrokJsonPayload
 )
@@ -62,60 +70,50 @@ def normalize_ai_usage(
 
     Codex capture marks fresh calls as invocation scope and resumes as cumulative.
     Bare Codex counters need an explicit scope; Claude defaults to invocation.
-    For a *confirmed* cumulative source the caller must provide a mapping with
-    ``usage_scope='cumulative'``, a session id and a strictly increasing integer
-    ``snapshot_sequence``. ``previous_snapshot`` uses that same envelope format.
-    Missing/ambiguous baselines and counter resets leave the delta unavailable.
+    For a confirmed cumulative Codex source, ``previous_snapshot`` must be the
+    immediately preceding snapshot from the same session. Missing or ambiguous
+    baselines, changed counter shapes, and resets leave the delta unavailable.
     ``requested_model`` is an optional caller hint for single-model fallbacks.
     """
     raw = _raw_payload(payload)
-    facts = _normalize(provider, raw)
-    scope = raw.get("usage_scope", "unknown" if provider == "codex" else "invocation")
+    if provider != "codex":
+        return _normalize(provider, raw)
+
+    scope = raw.get("usage_scope", "unknown")
     if scope == "invocation":
-        return facts
+        return _normalize(provider, raw)
     if scope != "cumulative":
-        return _unavailable(facts, "unknown usage scope")
+        return _unavailable(_normalize(provider, raw), "unknown usage scope")
+
     previous = _raw_payload(previous_snapshot) if previous_snapshot is not None else {}
-    before = _normalize(provider, previous)
-    sequence = _count(raw.get("snapshot_sequence"), [], "snapshot_sequence")
-    prior_sequence = _count(previous.get("snapshot_sequence"), [], "snapshot_sequence")
     if (
         previous.get("usage_scope") not in {"cumulative", "invocation"}
-        or not facts.session_id
-        or facts.session_id != before.session_id
-        or sequence is None
-        or prior_sequence is None
-        or sequence <= prior_sequence
-        or [(row.model, row.model_source) for row in facts.models]
-        != [(row.model, row.model_source) for row in before.models]
+        or not _session_id(raw)
+        or _session_id(raw) != _session_id(previous)
     ):
         return _unavailable(
-            facts, "cumulative usage needs an ordered same-session baseline"
+            _normalize(provider, raw),
+            "cumulative usage needs the immediately preceding same-session snapshot",
         )
-    diagnostics = list(facts.diagnostics)
+
     try:
-        rows = tuple(
-            replace(
-                row,
-                tokens=_delta(row.tokens, prior.tokens),
-                reported_cost_usd=_cost_delta(
-                    row.reported_cost_usd, prior.reported_cost_usd
-                ),
-            )
-            for row, prior in zip(facts.models, before.models)
+        invocation_usage = _codex_usage_delta(
+            _mapping(raw.get("usage")), _mapping(previous.get("usage"))
         )
-        tokens = _delta(facts.tokens, before.tokens)
     except ValueError:
-        return _unavailable(facts, "cumulative counters reset or changed shape")
-    diagnostics.append("invocation delta from cumulative baseline")
+        return _unavailable(
+            _normalize(provider, raw), "cumulative counters reset or changed shape"
+        )
+
+    facts = _normalize(provider, {**raw, "usage": invocation_usage})
     return replace(
         facts,
-        tokens=tokens,
-        models=rows,
-        reported_cost_usd=_cost_delta(
-            facts.reported_cost_usd, before.reported_cost_usd
+        raw=raw,
+        diagnostics=tuple(
+            dict.fromkeys(
+                (*facts.diagnostics, "invocation delta from cumulative baseline")
+            )
         ),
-        diagnostics=tuple(diagnostics),
     )
 
 
@@ -137,27 +135,11 @@ def _normalize(provider: str, raw: dict[str, Any]) -> UsageFacts:
     ):
         if isinstance(diagnostic, str):
             diagnostics.append(diagnostic)
-    session = (
-        _text(raw.get("session_id"))
-        or _text(raw.get("sessionId"))
-        or _text(raw.get("thread_id"))
-    )
+    session = _session_id(raw)
     usage = _mapping(raw.get("usage"))
     model = _text(raw.get("model"))
     rows: list[ModelUsage] = []
     if provider == "codex":
-        events = raw.get("events", ())
-        if isinstance(events, (list, tuple)):
-            for event in events:
-                if not isinstance(event, Mapping):
-                    continue
-                if event.get("type") == "thread.started":
-                    session = _text(event.get("thread_id")) or session
-                if event.get("type") in {"thread.started", "turn.completed"}:
-                    model = _text(event.get("model")) or model
-                if event.get("type") == "turn.completed":
-                    usage = _mapping(event.get("usage"))
-        # A standalone terminal event is also a supported provider envelope.
         tokens = _codex_tokens(usage, diagnostics)
     elif provider == "claude":
         for name, value in sorted(_mapping(raw.get("modelUsage")).items()):
@@ -231,6 +213,23 @@ def _codex_tokens(usage: Mapping[str, Any], diagnostics: list[str]) -> TokenUsag
     return _allocate(fresh, cached, written, output, reasoning, total, diagnostics)
 
 
+def _codex_usage_delta(
+    current: Mapping[str, Any], previous: Mapping[str, Any]
+) -> dict[str, int]:
+    delta: dict[str, int] = {}
+    for name in _CODEX_TOKEN_COUNTERS:
+        if (name in current) != (name in previous):
+            raise ValueError("counter shape changed")
+        if name not in current:
+            continue
+        now = _count(current[name], [], name)
+        before = _count(previous[name], [], name)
+        if now is None or before is None or now < before:
+            raise ValueError("counter reset or invalid value")
+        delta[name] = now - before
+    return delta
+
+
 def _claude_tokens(
     usage: Mapping[str, Any], diagnostics: list[str], *, camel: bool
 ) -> TokenUsage:
@@ -250,21 +249,13 @@ def _claude_tokens(
         )
     )
     components = [_count(usage.get(name), diagnostics, name) for name in names]
-    total_name = "totalTokens" if camel else "total_tokens"
-    total = _count(usage.get(total_name), diagnostics, total_name)
-    if total is None:
-        total = _sum_complete(components, diagnostics)
-    reasoning = _count(
-        usage.get("reasoningOutputTokens" if camel else "reasoning_output_tokens"),
-        diagnostics,
-        "reasoning_output_tokens",
-    )
+    total = _sum_complete(components, diagnostics)
     return _allocate(
         components[0],
         components[1],
         components[2],
         components[3],
-        reasoning,
+        None,
         total,
         diagnostics,
     )
@@ -367,27 +358,6 @@ def _cost(value: Any, diagnostics: list[str], name: str) -> float | None:
     return None
 
 
-def _cost_delta(current: float | None, previous: float | None) -> float | None:
-    return (
-        current - previous
-        if current is not None and previous is not None and current >= previous
-        else None
-    )
-
-
-def _delta(current: TokenUsage, previous: TokenUsage) -> TokenUsage:
-    values: dict[str, int | None] = {}
-    for item in fields(TokenUsage):
-        now, before = getattr(current, item.name), getattr(previous, item.name)
-        if (now is None) != (before is None) or (now is not None and now < before):
-            raise ValueError("counter reset or changed shape")
-        values[item.name] = now - before if now is not None else None
-    reasoning, output = values["reasoning_output_tokens"], values["output_tokens"]
-    if reasoning is not None and (output is None or reasoning > output):
-        raise ValueError("reasoning delta exceeds output delta")
-    return TokenUsage(**values)
-
-
 def _unavailable(facts: UsageFacts, diagnostic: str) -> UsageFacts:
     return replace(
         facts,
@@ -407,6 +377,14 @@ def _has_counts(tokens: TokenUsage) -> bool:
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _session_id(raw: Mapping[str, Any]) -> str | None:
+    return (
+        _text(raw.get("session_id"))
+        or _text(raw.get("sessionId"))
+        or _text(raw.get("thread_id"))
+    )
 
 
 def _text(value: Any) -> str | None:

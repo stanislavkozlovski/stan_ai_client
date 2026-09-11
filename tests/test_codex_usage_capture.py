@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -211,6 +210,35 @@ def test_real_provider_failures_remain_typed(
         CodexClient().run_structured("ok", schema=SCHEMA, capture_usage=True)
     assert caught.value.payload is not None
     assert caught.value.stdout == stdout
+    assert caught.value.payload.usage_scope == "invocation"
+    runner.assert_clean()
+
+
+@pytest.mark.parametrize(
+    ("stdout", "returncode", "options"),
+    [
+        (SUCCESS, 1, CodexRunOptions(continue_last_session=True)),
+        (
+            stream({"type": "turn.failed", "error": {"message": "failed"}}),
+            0,
+            CodexRunOptions(session_id="session-1"),
+        ),
+    ],
+)
+def test_resumed_provider_failures_preserve_cumulative_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    stdout: str,
+    returncode: int,
+    options: CodexRunOptions,
+) -> None:
+    runner = CapturedRun(stdout, returncode=returncode)
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", runner)
+    with pytest.raises(CodexProcessError) as caught:
+        CodexClient().run_structured(
+            "ok", schema=SCHEMA, capture_usage=True, options=options
+        )
+    assert caught.value.payload is not None
+    assert caught.value.payload.usage_scope == "cumulative"
     runner.assert_clean()
 
 
@@ -263,16 +291,33 @@ def test_capture_preserves_auto_approval_denial(
     runner.assert_clean()
 
 
-def test_capture_preserves_timeout_and_partial_payload(
+@pytest.mark.parametrize(
+    ("options", "expected_scope"),
+    [
+        (None, "invocation"),
+        (CodexRunOptions(session_id="session-1"), "cumulative"),
+        (CodexRunOptions(continue_last_session=True), "cumulative"),
+    ],
+)
+def test_capture_preserves_timeout_and_scoped_partial_payload(
     monkeypatch: pytest.MonkeyPatch,
+    options: CodexRunOptions | None,
+    expected_scope: str,
 ) -> None:
     runner = CapturedRun(timeout=True)
     monkeypatch.setattr("stan_ai_client.transport.subprocess.run", runner)
     with pytest.raises(CodexTimeoutError) as caught:
-        CodexClient().run_structured("ok", schema=SCHEMA, capture_usage=True)
+        CodexClient().run_structured(
+            "ok", schema=SCHEMA, capture_usage=True, options=options
+        )
     assert caught.value.stdout == SUCCESS
     assert caught.value.stderr == "partial stderr"
     assert caught.value.payload is not None and caught.value.payload.usage == USAGE
+    assert caught.value.payload.usage_scope == expected_scope
+    normalized = normalize_ai_usage("codex", caught.value.payload)
+    assert normalized.tokens.total_tokens == (
+        1200 if expected_scope == "invocation" else None
+    )
     runner.assert_clean()
 
 
@@ -312,15 +357,13 @@ def test_accounting_parser_keeps_later_failures_and_last_terminal_only() -> None
         + "broken\n"
         + stream({"type": "turn.completed"}, {"type": "turn.failed"})
     )
-    payload = parse_codex_usage_payload(text)
+    payload = parse_codex_usage_payload(text, usage_scope="invocation")
     assert payload.usage == {}
+    assert payload.usage_scope == "invocation"
     assert payload.events[-1]["type"] == "turn.failed"
     assert payload.usage_diagnostics
     assert try_parse_codex_jsonl_payload(text) is None
-    duplicated = parse_codex_usage_payload(SUCCESS + SUCCESS)
-    assert (
-        normalize_ai_usage(
-            "codex", replace(duplicated, usage_scope="invocation")
-        ).tokens.total_tokens
-        == 1200
+    duplicated = parse_codex_usage_payload(
+        SUCCESS + SUCCESS, usage_scope="invocation"
     )
+    assert normalize_ai_usage("codex", duplicated).tokens.total_tokens == 1200

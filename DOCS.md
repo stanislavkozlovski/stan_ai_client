@@ -671,12 +671,16 @@ integers fitting signed 64-bit storage are accepted. Reported finite,
 nonnegative USD values are preserved without estimating prices.
 
 Claude's `modelUsage` includes subagents and is counted once instead of adding
-the smaller top-level `usage` envelope. An absent usable model breakdown falls
-back to available top-level usage with an attribution diagnostic. Codex input
-includes cached input and output includes reasoning: 1,000 input, 800 cached,
-and 200 output yield 200 fresh + 800 cached + 200 output = 1,200 total.
-Invalid cache splits preserve an independently valid total as partly unsplit.
-Legacy `total_tokens` stays unsplit; Grok currently exposes identity only.
+the smaller top-level `usage` envelope. Only its documented `inputTokens`,
+`cacheReadInputTokens`, `cacheCreationInputTokens`, `outputTokens`, and
+`costUSD` fields are normalized; other fields remain in `raw`. An incomplete
+breakdown preserves known components but has no computed total. An absent usable
+model breakdown falls back to available top-level usage with an attribution
+diagnostic. Codex input includes cached input and output includes reasoning:
+1,000 input, 800 cached, and 200 output yield 200 fresh + 800 cached + 200 output
+= 1,200 total. Invalid cache splits preserve an independently valid total as
+partly unsplit. Legacy `total_tokens` stays unsplit; Grok currently exposes
+identity only.
 
 Model names come from provider metadata (`reported`). A mapping may supply
 `requested_model` for a single-model fallback (`requested`); otherwise the
@@ -693,18 +697,18 @@ usage. Raw Codex events lack launch context and default to `unknown`; callers
 must identify their scope. Claude result envelopes default to invocation scope.
 Passing a previous snapshot alone never subtracts an invocation-scoped result.
 
-For cumulative counters, provide `snapshot_sequence` in both mappings. Only a
-strictly later sequence, matching session identity, and compatible monotonic
-counters permit a delta. A missing baseline, reset, or unknown scope leaves
-invocation tokens unavailable; raw cumulative facts remain intact. The caller
-owns sequencing and supplies the preceding recorded snapshot.
+For cumulative counters, the caller supplies the immediately preceding captured
+snapshot from the same session. Compatible monotonic raw counters permit a
+delta. If ordering is ambiguous, pass no baseline; a missing baseline, reset,
+changed counter shape, or unknown scope leaves invocation tokens unavailable.
+Raw cumulative facts remain intact.
 
 ```python
-from dataclasses import asdict
-
-snapshot = {**asdict(resumed_result.payload), "snapshot_sequence": 2}
-previous = {**asdict(first_result.payload), "snapshot_sequence": 1}
-facts = normalize_ai_usage("codex", snapshot, previous_snapshot=previous)
+facts = normalize_ai_usage(
+    "codex",
+    resumed_result.payload,
+    previous_snapshot=first_result.payload,
+)
 ```
 
 Run `python examples/codex_smoke_test.py --usage-only` for two small live

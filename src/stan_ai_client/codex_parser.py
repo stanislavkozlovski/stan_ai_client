@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal
 
 from .types import CodexJsonPayload
 
@@ -46,7 +46,11 @@ def recover_codex_jsonl_prefix_payload(text: str) -> CodexJsonPayload | None:
     return _make_codex_jsonl_payload(events)
 
 
-def parse_codex_usage_payload(text: str) -> CodexJsonPayload:
+def parse_codex_usage_payload(
+    text: str,
+    *,
+    usage_scope: Literal["invocation", "cumulative", "unknown"] = "unknown",
+) -> CodexJsonPayload:
     """Best-effort accounting for structured capture, independent of the answer.
 
     Scan past bad lines so a later provider failure is still visible. Strict
@@ -73,6 +77,7 @@ def parse_codex_usage_payload(text: str) -> CodexJsonPayload:
         payload,
         usage=usage if isinstance(usage, dict) else {},
         usage_diagnostics=tuple(diagnostics),
+        usage_scope=usage_scope,
     )
 
 

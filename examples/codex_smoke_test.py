@@ -48,7 +48,7 @@ def usage_smoke() -> None:
         )
         session_id = None
         previous_snapshot = None
-        for sequence, label in enumerate(("fresh", "resume")):
+        for label in ("fresh", "resume"):
             result = client.run_structured(
                 'Do not use tools. Reply with the JSON object {"answer":"ok"}.',
                 schema=schema,
@@ -60,9 +60,8 @@ def usage_smoke() -> None:
             if session_id is not None:
                 assert result.payload.thread_id == session_id
             session_id = result.payload.thread_id
-            snapshot = {**asdict(result.payload), "snapshot_sequence": sequence}
             facts = normalize_ai_usage(
-                "codex", snapshot, previous_snapshot=previous_snapshot
+                "codex", result.payload, previous_snapshot=previous_snapshot
             )
             assert facts.tokens.total_tokens is not None, facts.diagnostics
             print(
@@ -78,7 +77,7 @@ def usage_smoke() -> None:
                 ),
                 flush=True,
             )
-            previous_snapshot = snapshot
+            previous_snapshot = result.payload
 
 
 def main() -> None:

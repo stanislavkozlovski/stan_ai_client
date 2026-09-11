@@ -6,7 +6,6 @@
   "fresh": {
     "thread_id": "smoke-session",
     "usage_scope": "invocation",
-    "snapshot_sequence": 0,
     "usage": {
       "input_tokens": 17485,
       "cached_input_tokens": 0,
@@ -18,7 +17,6 @@
   "resume": {
     "thread_id": "smoke-session",
     "usage_scope": "cumulative",
-    "snapshot_sequence": 1,
     "usage": {
       "input_tokens": 35001,
       "cached_input_tokens": 17280,

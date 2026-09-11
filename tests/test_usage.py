@@ -138,38 +138,71 @@ def test_claude_top_level_fallback_is_explicitly_incomplete() -> None:
     assert "Claude model attribution incomplete" in facts.diagnostics
 
 
-def test_partial_model_split_preserves_unsplit_remainder_and_reconciles() -> None:
+def test_partial_model_breakdown_preserves_known_documented_components() -> None:
     facts = normalize_ai_usage(
         "claude",
         {
             "modelUsage": {
-                "a": {"totalTokens": 100, "outputTokens": 10},
+                "a": {
+                    "outputTokens": 10,
+                    "totalTokens": 100,
+                    "reasoningOutputTokens": 9,
+                    "future": {"value": 1},
+                },
                 "b": claude_model(10, 20, 30, 40),
             }
         },
     )
-    assert facts.tokens == TokenUsage(10, 20, 30, 50, None, 90, 200)
+    assert facts.tokens == TokenUsage(10, 20, 30, 50)
+    assert facts.models[0].tokens == TokenUsage(output_tokens=10)
     for name in (
         "fresh_input_tokens",
         "cache_read_input_tokens",
         "cache_write_input_tokens",
         "output_tokens",
-        "unsplit_tokens",
-        "total_tokens",
     ):
         assert getattr(facts.tokens, name) == sum(
             getattr(row.tokens, name) or 0 for row in facts.models
         )
+    assert facts.raw["modelUsage"]["a"]["totalTokens"] == 100
+    assert facts.raw["modelUsage"]["a"]["reasoningOutputTokens"] == 9
+    assert facts.raw["modelUsage"]["a"]["future"] == {"value": 1}
 
 
-def test_conflicting_splits_keep_authoritative_total_unassigned() -> None:
+def test_undocumented_claude_totals_and_reasoning_remain_raw() -> None:
     facts = normalize_ai_usage(
         "claude",
-        {"modelUsage": {"a": {**claude_model(10, 20, 30, 40), "totalTokens": 50}}},
+        {
+            "modelUsage": {
+                "a": {
+                    **claude_model(10, 20, 30, 40),
+                    "totalTokens": 50,
+                    "reasoningOutputTokens": 20,
+                }
+            }
+        },
     )
-    assert facts.tokens == TokenUsage(unsplit_tokens=50, total_tokens=50)
+    assert facts.tokens == TokenUsage(10, 20, 30, 40, None, 0, 100)
     assert facts.models[0].tokens == facts.tokens
-    assert facts.raw["modelUsage"]["a"]["inputTokens"] == 10
+    assert facts.raw["modelUsage"]["a"]["totalTokens"] == 50
+    assert facts.raw["modelUsage"]["a"]["reasoningOutputTokens"] == 20
+
+
+def test_partial_claude_top_level_usage_does_not_invent_a_total() -> None:
+    facts = normalize_ai_usage(
+        "claude",
+        {
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "total_tokens": 999,
+                "reasoning_output_tokens": 5,
+            }
+        },
+    )
+    assert facts.tokens == TokenUsage(fresh_input_tokens=10, output_tokens=20)
+    assert facts.raw["usage"]["total_tokens"] == 999
+    assert facts.raw["usage"]["reasoning_output_tokens"] == 5
 
 
 def test_unusable_multi_model_breakdown_is_not_assigned_to_requested_model() -> None:
@@ -177,11 +210,16 @@ def test_unusable_multi_model_breakdown_is_not_assigned_to_requested_model() -> 
         "claude",
         {
             "modelUsage": {"a": {}, "b": {}},
-            "usage": {"total_tokens": 123},
+            "usage": {
+                "input_tokens": 123,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 0,
+            },
             "requested_model": "a",
         },
     )
-    assert facts.tokens == TokenUsage(unsplit_tokens=123, total_tokens=123)
+    assert facts.tokens == TokenUsage(123, 0, 0, 0, None, 0, 123)
     assert facts.models[0].model is None
 
 
@@ -235,17 +273,35 @@ def test_fresh_resume_and_duplicate_terminals_count_current_invocation_once() ->
     )
 
 
-def cumulative(sequence: int, input_tokens: int = 1000) -> dict[str, Any]:
+def test_codex_normalizer_uses_payload_fields_without_reinterpreting_events() -> None:
+    payload = {
+        **codex(10, 0, 5),
+        "events": [
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 1000,
+                    "cached_input_tokens": 800,
+                    "output_tokens": 200,
+                },
+            }
+        ],
+    }
+    facts = normalize_ai_usage("codex", payload)
+    assert facts.tokens.total_tokens == 15
+    assert facts.raw["events"] == payload["events"]
+
+
+def cumulative(input_tokens: Any = 1000) -> dict[str, Any]:
     return {
         **codex(input_tokens, 0, 200),
         "usage_scope": "cumulative",
-        "snapshot_sequence": sequence,
     }
 
 
-def test_confirmed_cumulative_counters_use_ordered_same_session_baseline() -> None:
+def test_confirmed_cumulative_counters_use_preceding_same_session_snapshot() -> None:
     facts = normalize_ai_usage(
-        "codex", cumulative(2, 1500), previous_snapshot=cumulative(1)
+        "codex", cumulative(1500), previous_snapshot=codex(1000, 0, 200)
     )
     assert facts.tokens.total_tokens == 500
     assert facts.tokens.output_tokens == 0
@@ -256,21 +312,62 @@ def test_confirmed_cumulative_counters_use_ordered_same_session_baseline() -> No
     "previous",
     [
         None,
-        cumulative(2),
-        cumulative(3),
-        {**cumulative(1), "thread_id": "other"},
-        codex(),
-        {**cumulative(1), "snapshot_sequence": None},
-        cumulative(1, 2000),
+        {**codex(), "thread_id": "other"},
+        {**codex(), "usage_scope": "unknown"},
+        cumulative(2000),
+        {
+            **codex(),
+            "usage": {"input_tokens": 1000, "cached_input_tokens": 0},
+        },
+        codex(True, 0, 200),
     ],
 )
 def test_ambiguous_baseline_or_reset_leaves_delta_unavailable(
     previous: dict[str, Any] | None,
 ) -> None:
-    facts = normalize_ai_usage("codex", cumulative(2, 1500), previous_snapshot=previous)
+    facts = normalize_ai_usage("codex", cumulative(1500), previous_snapshot=previous)
     assert facts.tokens == TokenUsage()
     assert all(row.tokens == TokenUsage() for row in facts.models)
     assert facts.diagnostics
+
+
+def test_cumulative_delta_allows_optional_counters_missing_from_both_snapshots() -> None:
+    previous = {
+        "thread_id": "session",
+        "usage_scope": "invocation",
+        "usage": {"input_tokens": 1000, "output_tokens": 100},
+    }
+    current = {
+        "thread_id": "session",
+        "usage_scope": "cumulative",
+        "usage": {"input_tokens": 1500, "output_tokens": 120},
+    }
+    facts = normalize_ai_usage("codex", current, previous_snapshot=previous)
+    assert facts.tokens == TokenUsage(
+        output_tokens=20, unsplit_tokens=500, total_tokens=520
+    )
+
+
+def test_cumulative_delta_revalidates_reasoning_as_an_output_subset() -> None:
+    previous = {
+        **codex(1000, 0, 100),
+        "usage": {
+            **codex(1000, 0, 100)["usage"],
+            "reasoning_output_tokens": 90,
+        },
+    }
+    current = {
+        **cumulative(1100),
+        "usage": {
+            **codex(1100, 0, 110)["usage"],
+            "reasoning_output_tokens": 105,
+        },
+    }
+    facts = normalize_ai_usage("codex", current, previous_snapshot=previous)
+    assert facts.tokens.total_tokens == 110
+    assert facts.tokens.output_tokens == 10
+    assert facts.tokens.reasoning_output_tokens is None
+    assert "reasoning subset cannot be verified against output" in facts.diagnostics
 
 
 def test_unknown_counter_scope_is_not_guessed() -> None:
