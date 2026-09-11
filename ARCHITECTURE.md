@@ -109,6 +109,13 @@ By default, Codex runs with `--dangerously-bypass-approvals-and-sandbox`. Set
 7. `schema.py` validates the returned object against the same schema
 8. `client` deletes the temporary schema file and returns `CodexStructuredRunResult`
 
+With `capture_usage=True`, execution also adds `--json` and a fresh
+`--output-last-message` path. The final file supplies the validated object;
+stdout remains JSONL, with best-effort usage/events in the payload. Provider
+failures are classified independently from accounting. Both temporary files
+are removed on success, failure, and timeout. `usage.py` converts provider
+facts into disjoint token allocations without I/O or consumer context.
+
 ## Module Map
 
 - `src/stan_ai_client/claude.py`: `ClaudeCodeClient`, Claude command

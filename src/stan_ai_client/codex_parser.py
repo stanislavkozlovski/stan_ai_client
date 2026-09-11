@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from typing import Any
+from dataclasses import replace
+from typing import Any, Literal
 
 from .types import CodexJsonPayload
 
@@ -11,6 +12,7 @@ CODEX_ERROR_EVENT_TYPES = frozenset({"error", "turn.failed"})
 ``error`` field and network classification select events through this set."""
 
 _CODEX_JSONL_PARSE_ERRORS = (TypeError, ValueError, json.JSONDecodeError)
+_TERMINAL_STATUS_UNCERTAIN = "terminal status uncertain after invalid JSONL event"
 CODEX_AUTO_REVIEW_DENIAL_MARKER = (
     "This action was rejected due to unacceptable risk."
 )
@@ -43,6 +45,61 @@ def recover_codex_jsonl_prefix_payload(text: str) -> CodexJsonPayload | None:
     if not events:
         return None
     return _make_codex_jsonl_payload(events)
+
+
+def parse_codex_usage_payload(
+    text: str,
+    *,
+    usage_scope: Literal["invocation", "cumulative", "unknown"] = "unknown",
+) -> tuple[CodexJsonPayload, bool]:
+    """Best-effort accounting for structured capture, independent of the answer.
+
+    Scan past bad lines so a later provider failure is still visible. Strict
+    ``run_json`` parsing deliberately does not use this recovery policy.
+
+    The flag is the one verdict on whether the provider declared the turn
+    failed: a ``turn.failed`` event, or a trailing ``error`` event that no
+    malformed line follows, because a truncated stream cannot prove the error
+    was terminal. ``usage_diagnostics`` describe that verdict; they never
+    decide it.
+    """
+    events: list[dict[str, Any]] = []
+    diagnostics: list[str] = []
+    terminals: list[dict[str, Any]] = []
+    failed = False
+    terminal: str | None = None
+    invalid_after_terminal = False
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            event = _parse_codex_jsonl_event(line)
+        except (*_CODEX_JSONL_PARSE_ERRORS, RecursionError):
+            diagnostics.append(f"invalid JSONL event at line {number}")
+            invalid_after_terminal = True
+            continue
+        events.append(event)
+        if event["type"] == "turn.failed":
+            failed = True
+        elif event["type"] in {"error", "turn.completed"}:
+            terminal, invalid_after_terminal = event["type"], False
+            if event["type"] == "turn.completed":
+                terminals.append(event)
+    # Use the last terminal exactly once, including when its usage is absent.
+    usage = terminals[-1].get("usage") if terminals else None
+    if not isinstance(usage, dict) or not usage:
+        diagnostics.append("terminal usage unavailable")
+    if len(terminals) > 1 and any(event != terminals[-1] for event in terminals):
+        diagnostics.append("multiple terminal snapshots; using the last")
+    if terminal == "error" and invalid_after_terminal:
+        diagnostics.append(_TERMINAL_STATUS_UNCERTAIN)
+    payload = replace(
+        _make_codex_jsonl_payload(events),
+        usage=usage if isinstance(usage, dict) else {},
+        usage_diagnostics=tuple(diagnostics),
+        usage_scope=usage_scope,
+    )
+    return payload, failed or (terminal == "error" and not invalid_after_terminal)
 
 
 def codex_auto_review_denial_text(payload: CodexJsonPayload) -> str | None:

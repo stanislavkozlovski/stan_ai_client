@@ -253,9 +253,15 @@ class CodexExecutableNotFoundError(ExecutableNotFoundError, CodexCodeError):
 
 
 class CodexTimeoutError(AIClientTimeoutError, CodexCodeError):
-    def __init__(self, command: CommandMetadata, timeout_seconds: float) -> None:
+    def __init__(
+        self, command: CommandMetadata, timeout_seconds: float, *,
+        stdout: str = "", stderr: str = "", payload: CodexJsonPayload | None = None,
+    ) -> None:
         self.command = command
         self.timeout_seconds = timeout_seconds
+        self.stdout = stdout
+        self.stderr = stderr
+        self.payload = payload
         super().__init__(f"Codex command timed out after {timeout_seconds}s")
 
 
@@ -272,7 +278,7 @@ class CodexNetworkUnavailableError(NetworkUnavailableError, CodexProcessError):
 
 
 class CodexProtocolError(ProtocolError, CodexCodeError):
-    pass
+    payload: CodexJsonPayload | None = None
 
 
 class CodexStructuredOutputMissingError(StructuredOutputMissingError, CodexProtocolError):

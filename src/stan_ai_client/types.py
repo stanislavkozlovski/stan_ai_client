@@ -207,6 +207,8 @@ class CodexJsonPayload:
     error: dict[str, Any] | None
     structured_output: Any | None
     _structured_output_present: bool = field(default=False, repr=False)
+    usage_diagnostics: tuple[str, ...] = ()
+    usage_scope: Literal["invocation", "cumulative", "unknown"] = "unknown"
 
     @property
     def has_structured_output(self) -> bool:

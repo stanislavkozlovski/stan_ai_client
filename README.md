@@ -514,6 +514,8 @@ See [DOCS.md](./DOCS.md) for:
 - Claude text mode always requests `--output-format text`
 - Codex JSON mode uses `codex exec --json`
 - Codex structured mode uses `codex exec --output-schema <tempfile>`
+- Opt-in `run_structured(..., capture_usage=True)` also captures JSONL usage;
+  `normalize_ai_usage(provider, result.payload)` returns token facts without pricing
 - Codex defaults to `--dangerously-bypass-approvals-and-sandbox`
 - Grok uses `grok -p --output-format plain|json` (prompt via arg or --prompt-file transparently)
 - logging uses stdlib `logging`

@@ -163,6 +163,7 @@ def run_structured(
     schema: StructuredSchema[T],
     options: CodexRunOptions | None = None,
     rate_limit_policy: RateLimitRetryPolicy | None = None,
+    capture_usage: bool = False,
 ) -> CodexStructuredRunResult[T]: ...
 ```
 
@@ -523,6 +524,25 @@ Structured mode writes the schema to a temporary file, runs
 `codex exec --output-schema <file>`, parses stdout as JSON, validates the result,
 and deletes the temporary schema file.
 
+To collect usage, opt in per call:
+
+```python
+from stan_ai_client import normalize_ai_usage
+
+result = client.run_structured("Summarize this repository.", schema=schema, capture_usage=True)
+facts = normalize_ai_usage("codex", result.payload)
+print(result.structured_output["summary"], facts.tokens.total_tokens)
+```
+
+This adds `--json` and a fresh `--output-last-message` file. The file supplies
+the validated structured result; `.stdout` contains raw JSONL and `.payload`
+retains thread ID, usage, and decoded events. `usage_diagnostics` describes
+missing or malformed event data. A valid final answer still succeeds when
+accounting is unavailable. Terminal provider failures retain typed errors;
+timeouts retain partial stdout/stderr, and in this mode also a recovered payload.
+Result and schema files are cleaned up on every exit. Default structured,
+text, and JSON calls keep their existing protocols.
+
 Codex schemas are additionally checked against the OpenAI structured-output
 subset before the temporary file is created. The root schema must be an object,
 object properties must all be listed in `required`, and objects must set
@@ -632,6 +652,70 @@ class CodexStructuredRunResult(Generic[TStructured]):
 - `events`
 - `error`
 - `structured_output`
+- `usage_diagnostics` (best-effort structured capture)
+- `usage_scope` (`invocation`, `cumulative`, or `unknown`)
+
+### Normalized usage
+
+`normalize_ai_usage(provider, payload, *, previous_snapshot=None)` accepts a
+typed provider payload or a mapping. It returns `UsageFacts` containing
+`tokens: TokenUsage`, `models: tuple[ModelUsage, ...]`, session/plan identity,
+reported cost, copied raw facts, and diagnostics. It performs no I/O.
+
+`TokenUsage` has `fresh_input_tokens`, `cache_read_input_tokens`,
+`cache_write_input_tokens`, `output_tokens`, `reasoning_output_tokens`,
+`unsplit_tokens`, and `total_tokens`. Reasoning is already inside output;
+the other components and unsplit remainder are disjoint. Missing, unsupported,
+and invalid counters are `None`; measured zero remains zero. Only nonnegative
+integers fitting signed 64-bit storage are accepted. Reported finite,
+nonnegative USD values are preserved without estimating prices.
+
+Claude's `modelUsage` includes subagents and is counted once instead of adding
+the smaller top-level `usage` envelope. Only its documented `inputTokens`,
+`cacheReadInputTokens`, `cacheCreationInputTokens`, `outputTokens`, and
+`costUSD` fields are normalized; other fields remain in `raw`. An incomplete
+or malformed breakdown preserves known components but has no computed total.
+Reported model names and costs remain available even when their token counters
+are unusable. If no model has usable counters, whole-call facts fall back to
+available top-level usage and assign those tokens to an additional unknown-model
+row, with an attribution diagnostic. Codex input includes cached input and output
+includes reasoning:
+1,000 input, 800 cached, and 200 output yield 200 fresh + 800 cached + 200 output
+= 1,200 total. Invalid cache splits preserve an independently valid total as
+partly unsplit. Legacy `total_tokens` stays unsplit; Grok currently exposes
+identity only.
+
+Model names come from provider metadata (`reported`). A mapping may supply
+`requested_model` for a single-model fallback (`requested`); otherwise the
+row has no model (`unknown`). Multi-model totals are never assigned to that
+hint. Unknown provider fields remain in `raw`.
+
+Codex CLI 0.154.0 reports cumulative session counters, confirmed by the
+fresh/resume smoke fixture and its
+[JSONL emitter](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/exec/src/event_processor_with_jsonl_output.rs).
+Structured capture marks
+fresh calls as `invocation` (a new session starts at zero) and resumed calls as
+`cumulative`. A resumed call without a baseline has unavailable invocation
+usage. Raw Codex events lack launch context and default to `unknown`; callers
+must identify their scope. Claude result envelopes default to invocation scope.
+Passing a previous snapshot alone never subtracts an invocation-scoped result.
+
+For cumulative counters, the caller supplies the immediately preceding captured
+snapshot from the same session. Compatible monotonic raw counters permit a
+delta. If ordering is ambiguous, pass no baseline; a missing baseline, reset,
+changed counter shape, or unknown scope leaves invocation tokens unavailable.
+Raw cumulative facts remain intact.
+
+```python
+facts = normalize_ai_usage(
+    "codex",
+    resumed_result.payload,
+    previous_snapshot=first_result.payload,
+)
+```
+
+Run `python examples/codex_smoke_test.py --usage-only` for two small live
+structured calls (fresh and resumed), with CLI/client versions and counters.
 
 ## Exception Model
 
@@ -715,7 +799,8 @@ Claude also recognizes its own `Unable to connect to API` and `Connection
 closed mid-response` failures. Classification examines provider-declared error
 payloads or events and guarded process diagnostics. Claude and Grok inspect
 process stderr plus Claude `API Error:` and Grok `Error:` stdout lines. Codex
-inspects JSONL errors and JSON-mode stderr; because text- and structured-mode
+inspects JSONL errors and JSON-mode stderr (also for structured usage capture);
+because text- and default structured-mode
 stderr also carries progress, only `ERROR:`-prefixed lines are inspected in
 those modes. Ordinary transcripts, prompts, documentation, diffs, and
 successful output are not searched. Rate-limit evidence on any of those

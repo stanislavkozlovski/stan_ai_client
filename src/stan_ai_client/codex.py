@@ -6,10 +6,10 @@ import os
 import tempfile
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
-from typing import Any, Callable, Mapping, TypeVar
+from typing import Any, Callable, Literal, Mapping, TypeVar
 from urllib.parse import unquote
 
 from jsonschema.exceptions import ValidationError
@@ -24,6 +24,7 @@ from ._retry import run_with_rate_limit_retry
 from .codex_parser import (
     codex_auto_review_denial_text,
     make_codex_structured_payload,
+    parse_codex_usage_payload,
     recover_codex_jsonl_prefix_payload,
     summarize_codex_error_text,
     try_parse_codex_jsonl_payload,
@@ -300,9 +301,12 @@ class CodexClient:
         schema: StructuredSchema[TStructured],
         options: CodexRunOptions | None = None,
         rate_limit_policy: RateLimitRetryPolicy | None = None,
+        capture_usage: bool = False,
     ) -> CodexStructuredRunResult[TStructured]:
         return self._run_with_rate_limit_policy(
-            lambda: self._run_structured_once(prompt, schema=schema, options=options),
+            lambda: self._run_structured_once(
+                prompt, schema=schema, options=options, capture_usage=capture_usage
+            ),
             rate_limit_policy=rate_limit_policy,
         )
 
@@ -312,9 +316,16 @@ class CodexClient:
         *,
         schema: StructuredSchema[TStructured],
         options: CodexRunOptions | None = None,
+        capture_usage: bool = False,
     ) -> CodexStructuredRunResult[TStructured]:
         schema_path = self._write_schema_file(schema)
         try:
+            if capture_usage:
+                with tempfile.TemporaryDirectory(prefix="stan-ai-client-codex-result-") as directory:
+                    return self._run_structured_with_schema_file(
+                        prompt, schema=schema, schema_path=schema_path, options=options,
+                        output_last_message_path=Path(directory) / "result.json",
+                    )
             return self._run_structured_with_schema_file(
                 prompt,
                 schema=schema,
@@ -334,34 +345,73 @@ class CodexClient:
         schema: StructuredSchema[TStructured],
         schema_path: str,
         options: CodexRunOptions | None,
+        output_last_message_path: Path | None = None,
     ) -> CodexStructuredRunResult[TStructured]:
         prepared, effective = self._prepare(
             prompt,
             options=options,
             output_schema_path=schema_path,
+            json_output=output_last_message_path is not None,
+            output_last_message_path=output_last_message_path,
         )
         self._log_start(prompt, output_format="structured", prepared=prepared, effective=effective)
         self.logger.debug("Codex structured mode enabled schema_validated_locally=True")
 
-        completed, metadata = self._execute(prepared)
+        # A result file means usage capture: stdout is JSONL, and a resumed
+        # session reports cumulative counters.
+        usage_scope: Literal["invocation", "cumulative"] | None = None
+        if output_last_message_path is not None:
+            usage_scope = (
+                "cumulative"
+                if effective.session_id is not None or effective.continue_last_session
+                else "invocation"
+            )
+        completed, metadata = self._execute(
+            prepared, captured_usage_scope=usage_scope
+        )
         stdout = completed.stdout
         stderr = completed.stderr
 
-        if completed.returncode != 0:
+        if usage_scope is None:
+            output_protocol: CodexOutputProtocol = "unstructured"
+            payload = make_codex_structured_payload(None, structured_output_present=False)
+            provider_failed = False
+        else:
+            output_protocol = "jsonl"
+            payload, provider_failed = parse_codex_usage_payload(
+                stdout, usage_scope=usage_scope
+            )
+            self._raise_if_approval_required(
+                completed, metadata, payload=payload,
+                permission_mode=effective.permission_mode,
+            )
+
+        if completed.returncode != 0 or provider_failed:
             raise self._build_process_error(
                 metadata,
                 returncode=completed.returncode,
                 stdout=stdout,
                 stderr=stderr,
-                payload=None,
-                output_protocol="unstructured",
+                # Default structured mode has no provider payload to classify.
+                payload=payload if usage_scope is not None else None,
+                output_protocol=output_protocol,
             )
 
-        if not stdout.strip():
-            payload = make_codex_structured_payload(
-                None,
-                structured_output_present=False,
-            )
+        final_text = stdout
+        if output_last_message_path is not None:
+            try:
+                final_text = output_last_message_path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                final_text = ""
+            except (OSError, UnicodeError) as exc:
+                error = CodexProtocolError(
+                    "Codex final message could not be read", command=metadata,
+                    stdout=stdout, stderr=stderr,
+                )
+                error.payload = payload
+                raise error from exc
+
+        if not final_text.strip():
             missing_error = CodexStructuredOutputMissingError(
                 "Codex returned empty output in structured mode",
                 command=metadata,
@@ -373,18 +423,21 @@ class CodexClient:
             raise missing_error
 
         try:
-            raw_structured_output = json.loads(stdout)
+            raw_structured_output = json.loads(final_text)
         except json.JSONDecodeError as exc:
             error = CodexProtocolError(
-                f"Codex returned non-JSON output in structured mode: {stdout.strip()[:500]}",
+                f"Codex returned non-JSON output in structured mode: {final_text.strip()[:500]}",
                 command=metadata,
                 stdout=stdout,
                 stderr=stderr,
             )
+            error.payload = payload
             self._log_protocol_error(error)
             raise error from exc
 
-        payload = make_codex_structured_payload(raw_structured_output)
+        payload = replace(
+            payload, structured_output=raw_structured_output, _structured_output_present=True
+        )
 
         try:
             structured_output = schema.validate_response(raw_structured_output)
@@ -440,6 +493,7 @@ class CodexClient:
         options: CodexRunOptions | None,
         json_output: bool = False,
         output_schema_path: str | None = None,
+        output_last_message_path: Path | None = None,
     ) -> tuple[PreparedCommand, ResolvedCodexRunOptions]:
         effective = self._resolve_options(options)
         if effective.session_id is not None and effective.continue_last_session:
@@ -452,6 +506,7 @@ class CodexClient:
             effective=effective,
             json_output=json_output,
             output_schema_path=output_schema_path,
+            output_last_message_path=output_last_message_path,
         )
         if effective.extra_args is not None:
             argv.extend(effective.extra_args)
@@ -496,6 +551,7 @@ class CodexClient:
         effective: ResolvedCodexRunOptions,
         json_output: bool,
         output_schema_path: str | None,
+        output_last_message_path: Path | None = None,
     ) -> None:
         if effective.model:
             argv.extend(["--model", effective.model])
@@ -522,12 +578,17 @@ class CodexClient:
             argv.append("--json")
         if output_schema_path is not None:
             argv.extend([OUTPUT_SCHEMA_ARG_FLAG, output_schema_path])
+        if output_last_message_path is not None:
+            argv.extend(["--output-last-message", str(output_last_message_path)])
         if effective.add_dirs is not None:
             for directory in effective.add_dirs:
                 argv.extend(["--add-dir", str(directory)])
 
     def _execute(
-        self, prepared: PreparedCommand
+        self,
+        prepared: PreparedCommand,
+        *,
+        captured_usage_scope: Literal["invocation", "cumulative"] | None = None,
     ) -> tuple[CompletedProcess[str], CommandMetadata]:
         started_at = time.monotonic()
         try:
@@ -564,7 +625,19 @@ class CodexClient:
                 _redact_argv(prepared.argv, prompt_in_argv=_prompt_in_argv(prepared)),
                 metadata.elapsed_ms,
             )
-            raise CodexTimeoutError(metadata, prepared.timeout_seconds) from exc
+            stdout = _timeout_text(exc.stdout)
+            payload: CodexJsonPayload | None = None
+            if captured_usage_scope is not None:
+                payload, _ = parse_codex_usage_payload(
+                    stdout, usage_scope=captured_usage_scope
+                )
+            raise CodexTimeoutError(
+                metadata,
+                prepared.timeout_seconds,
+                stdout=stdout,
+                stderr=_timeout_text(exc.stderr),
+                payload=payload,
+            ) from exc
 
         metadata = CommandMetadata(
             argv=prepared.argv,
@@ -597,18 +670,14 @@ class CodexClient:
                 stdout=stdout,
                 stderr=trusted_texts[0] if trusted_texts else stderr,
             )
-            rate_limit_texts = trusted_texts
         else:
             error_text = summarize_codex_error_text(
                 payload=payload,
                 stdout=stdout,
                 stderr=stderr,
             )
-            # JSONL stdout is not part of the trusted texts, so the summary is
-            # the only rate-limit candidate for a failure reported there alone.
-            rate_limit_texts = (error_text, *trusted_texts)
         rate_limit_text = next(
-            (text for text in rate_limit_texts if is_rate_limit_text(text)),
+            (text for text in trusted_texts if is_rate_limit_text(text)),
             None,
         )
         if rate_limit_text is not None:
@@ -832,6 +901,10 @@ class CodexClient:
             schema_file.write(schema.cli_json)
             schema_file.write("\n")
             return schema_file.name
+
+
+def _timeout_text(value: str | bytes | None) -> str:
+    return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
 
 
 def _redact_argv(argv: tuple[str, ...], *, prompt_in_argv: bool) -> tuple[str, ...]:

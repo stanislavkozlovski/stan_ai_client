@@ -57,6 +57,7 @@ from .exceptions import (
 )
 from .rate_limits import RateLimitInfo, parse_rate_limit_info
 from .schema import StructuredSchema
+from .usage import ModelUsage, TokenUsage, UsageFacts, normalize_ai_usage
 from .types import (
     ClaudeEffort,
     ClaudeJsonPayload,
@@ -84,6 +85,10 @@ from .types import (
 __version__ = get_version()
 
 __all__ = [
+    "ModelUsage",
+    "TokenUsage",
+    "UsageFacts",
+    "normalize_ai_usage",
     "__version__",
     "AIClientError",
     "AIClientTimeoutError",
