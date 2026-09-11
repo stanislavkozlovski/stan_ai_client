@@ -142,23 +142,33 @@ def _normalize(provider: str, raw: dict[str, Any]) -> UsageFacts:
     if provider == "codex":
         tokens = _codex_tokens(usage, diagnostics)
     elif provider == "claude":
-        for name, value in sorted(_mapping(raw.get("modelUsage")).items()):
-            if not isinstance(name, str) or not isinstance(value, Mapping):
+        model_usage = _mapping(raw.get("modelUsage"))
+        for name, value in sorted(model_usage.items(), key=lambda item: str(item[0])):
+            if not isinstance(value, Mapping):
                 diagnostics.append("invalid Claude model usage row")
+                rows.append(
+                    ModelUsage(
+                        name if isinstance(name, str) else None,
+                        "reported" if isinstance(name, str) else "unknown",
+                        TokenUsage(),
+                    )
+                )
                 continue
             row_tokens = _claude_tokens(value, diagnostics, camel=True)
+            model_name = name if isinstance(name, str) else None
+            if model_name is None:
+                diagnostics.append("invalid Claude model usage row")
             rows.append(
                 ModelUsage(
-                    name,
-                    "reported",
+                    model_name,
+                    "reported" if model_name is not None else "unknown",
                     row_tokens,
                     _cost(value.get("costUSD"), diagnostics, f"{name}.costUSD"),
                 )
             )
-        if rows and any(_has_counts(row.tokens) for row in rows):
+        if any(_has_counts(row.tokens) for row in rows):
             tokens = _sum_rows(rows, diagnostics)
         else:
-            rows = []
             tokens = _claude_tokens(usage or raw, diagnostics, camel=False)
             diagnostics.append("Claude model attribution incomplete")
     elif provider == "grok":

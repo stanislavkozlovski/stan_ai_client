@@ -169,6 +169,22 @@ def test_partial_model_breakdown_preserves_known_documented_components() -> None
     assert facts.raw["modelUsage"]["a"]["future"] == {"value": 1}
 
 
+def test_malformed_claude_model_row_keeps_invocation_total_unavailable() -> None:
+    facts = normalize_ai_usage(
+        "claude",
+        {
+            "modelUsage": {
+                "a": claude_model(10, 20, 30, 40),
+                "b": None,
+            }
+        },
+    )
+    assert facts.tokens == TokenUsage(10, 20, 30, 40)
+    assert [row.model for row in facts.models] == ["a", "b"]
+    assert facts.models[1].tokens == TokenUsage()
+    assert "invalid Claude model usage row" in facts.diagnostics
+
+
 def test_undocumented_claude_totals_and_reasoning_remain_raw() -> None:
     facts = normalize_ai_usage(
         "claude",
@@ -205,7 +221,7 @@ def test_partial_claude_top_level_usage_does_not_invent_a_total() -> None:
     assert facts.raw["usage"]["reasoning_output_tokens"] == 5
 
 
-def test_unusable_multi_model_breakdown_is_not_assigned_to_requested_model() -> None:
+def test_unusable_models_keep_identity_without_token_attribution() -> None:
     facts = normalize_ai_usage(
         "claude",
         {
@@ -220,7 +236,29 @@ def test_unusable_multi_model_breakdown_is_not_assigned_to_requested_model() -> 
         },
     )
     assert facts.tokens == TokenUsage(123, 0, 0, 0, None, 0, 123)
-    assert facts.models[0].model is None
+    assert [row.model for row in facts.models] == ["a", "b"]
+    assert all(row.tokens == TokenUsage() for row in facts.models)
+
+
+def test_top_level_fallback_retains_reported_model_identity_and_cost() -> None:
+    facts = normalize_ai_usage(
+        "claude",
+        {
+            "modelUsage": {"a": {"costUSD": 0.25}},
+            "usage": {
+                "input_tokens": 10,
+                "cache_read_input_tokens": 20,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 30,
+            },
+        },
+    )
+    assert facts.tokens == TokenUsage(10, 20, 0, 30, None, 0, 60)
+    assert len(facts.models) == 1
+    assert facts.models[0].model == "a"
+    assert facts.models[0].model_source == "reported"
+    assert facts.models[0].tokens == TokenUsage()
+    assert facts.models[0].reported_cost_usd == 0.25
 
 
 @pytest.mark.parametrize("value", [True, -1, float("inf"), float("nan"), "1", 10**1000])

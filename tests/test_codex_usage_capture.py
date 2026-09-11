@@ -242,6 +242,39 @@ def test_resumed_provider_failures_preserve_cumulative_scope(
     runner.assert_clean()
 
 
+def test_jsonl_tool_output_does_not_authorize_rate_limit_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CapturedRun(
+        stream(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "command_execution",
+                    "aggregated_output": "Rate limit exceeded, retry after 2",
+                },
+            }
+        ),
+        returncode=1,
+    )
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", runner)
+    sleeps: list[float] = []
+    monkeypatch.setattr("stan_ai_client._retry.time.sleep", sleeps.append)
+
+    with pytest.raises(CodexProcessError) as caught:
+        CodexClient().run_structured(
+            "ok",
+            schema=SCHEMA,
+            capture_usage=True,
+            rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=62),
+        )
+
+    assert type(caught.value) is CodexProcessError
+    assert len(runner.argv) == 1
+    assert sleeps == []
+    runner.assert_clean()
+
+
 def test_quoted_errors_do_not_fail_and_recovered_error_is_not_terminal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -261,6 +294,27 @@ def test_quoted_errors_do_not_fail_and_recovered_error_is_not_terminal(
     assert CodexClient().run_structured(
         "ok", schema=SCHEMA, capture_usage=True
     ).structured_output == {"answer": "ok"}
+
+
+def test_truncated_completion_does_not_revive_recoverable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error_event = {"type": "error", "message": "connection interrupted"}
+    stdout = stream(error_event) + '{"type":"turn.completed","usage":'
+    runner = CapturedRun(stdout)
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", runner)
+
+    result = CodexClient().run_structured(
+        "ok", schema=SCHEMA, capture_usage=True
+    )
+
+    assert result.structured_output == {"answer": "ok"}
+    assert result.payload.error == error_event
+    assert result.payload.usage == {}
+    assert "terminal status uncertain after invalid JSONL event" in (
+        result.payload.usage_diagnostics
+    )
+    runner.assert_clean()
 
 
 def test_capture_preserves_auto_approval_denial(

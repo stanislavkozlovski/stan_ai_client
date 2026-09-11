@@ -12,6 +12,7 @@ CODEX_ERROR_EVENT_TYPES = frozenset({"error", "turn.failed"})
 ``error`` field and network classification select events through this set."""
 
 _CODEX_JSONL_PARSE_ERRORS = (TypeError, ValueError, json.JSONDecodeError)
+_TERMINAL_STATUS_UNCERTAIN = "terminal status uncertain after invalid JSONL event"
 CODEX_AUTO_REVIEW_DENIAL_MARKER = (
     "This action was rejected due to unacceptable risk."
 )
@@ -58,13 +59,21 @@ def parse_codex_usage_payload(
     """
     events: list[dict[str, Any]] = []
     diagnostics: list[str] = []
+    terminal_status: str | None = None
+    terminal_status_line = 0
+    last_invalid_line = 0
     for number, line in enumerate(text.splitlines(), 1):
         if not line.strip():
             continue
         try:
-            events.append(_parse_codex_jsonl_event(line))
+            event = _parse_codex_jsonl_event(line)
+            events.append(event)
+            if event["type"] in {"error", "turn.completed"}:
+                terminal_status = event["type"]
+                terminal_status_line = number
         except (*_CODEX_JSONL_PARSE_ERRORS, RecursionError):
             diagnostics.append(f"invalid JSONL event at line {number}")
+            last_invalid_line = number
     payload = _make_codex_jsonl_payload(events)
     terminals = [event for event in events if event["type"] == "turn.completed"]
     # Use the last terminal exactly once, including when its usage is absent.
@@ -73,6 +82,8 @@ def parse_codex_usage_payload(
         diagnostics.append("terminal usage unavailable")
     if len(terminals) > 1 and any(event != terminals[-1] for event in terminals):
         diagnostics.append("multiple terminal snapshots; using the last")
+    if terminal_status == "error" and last_invalid_line > terminal_status_line:
+        diagnostics.append(_TERMINAL_STATUS_UNCERTAIN)
     return replace(
         payload,
         usage=usage if isinstance(usage, dict) else {},
@@ -88,7 +99,10 @@ def codex_usage_has_terminal_error(payload: CodexJsonPayload) -> bool:
             return True
         if event["type"] in {"error", "turn.completed"}:
             terminal = event["type"]
-    return terminal == "error"
+    return (
+        terminal == "error"
+        and _TERMINAL_STATUS_UNCERTAIN not in payload.usage_diagnostics
+    )
 
 
 def codex_auto_review_denial_text(payload: CodexJsonPayload) -> str | None:

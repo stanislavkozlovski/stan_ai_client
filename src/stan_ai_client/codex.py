@@ -669,18 +669,14 @@ class CodexClient:
                 stdout=stdout,
                 stderr=trusted_texts[0] if trusted_texts else stderr,
             )
-            rate_limit_texts = trusted_texts
         else:
             error_text = summarize_codex_error_text(
                 payload=payload,
                 stdout=stdout,
                 stderr=stderr,
             )
-            # JSONL stdout is not part of the trusted texts, so the summary is
-            # the only rate-limit candidate for a failure reported there alone.
-            rate_limit_texts = (error_text, *trusted_texts)
         rate_limit_text = next(
-            (text for text in rate_limit_texts if is_rate_limit_text(text)),
+            (text for text in trusted_texts if is_rate_limit_text(text)),
             None,
         )
         if rate_limit_text is not None:
