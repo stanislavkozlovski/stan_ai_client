@@ -26,7 +26,7 @@ from stan_ai_client.types import Effort, ReasoningEffort
 
 
 def test_provider_specific_effort_types_are_public() -> None:
-    assert get_args(ClaudeEffort) == ("low", "medium", "high", "max")
+    assert get_args(ClaudeEffort) == ("low", "medium", "high", "xhigh", "max")
     assert get_args(CodexReasoningEffort) == (
         "minimal",
         "low",
@@ -35,7 +35,7 @@ def test_provider_specific_effort_types_are_public() -> None:
         "xhigh",
         "max",
     )
-    assert get_args(GrokEffort) == ("low", "medium", "high", "max")
+    assert get_args(GrokEffort) == ("low", "medium", "high", "xhigh", "max")
 
 
 def test_legacy_effort_aliases_remain_compatible() -> None:

@@ -280,6 +280,10 @@ def test_run_text_can_use_argv_and_extra_flags(monkeypatch: pytest.MonkeyPatch) 
     assert recorder.calls[0]["timeout"] == 90
     assert recorder.calls[0]["argv"][-1] == "tag this"
     assert "--debug" in recorder.calls[0]["argv"]
+    model_index = recorder.calls[0]["argv"].index("--model")
+    assert recorder.calls[0]["argv"][model_index + 1] == "claude-opus-5-5"
+    effort_index = recorder.calls[0]["argv"].index("--effort")
+    assert recorder.calls[0]["argv"][effort_index + 1] == "max"
     allowed_index = recorder.calls[0]["argv"].index("--allowed-tools")
     assert recorder.calls[0]["argv"][allowed_index + 1] == ""
 
