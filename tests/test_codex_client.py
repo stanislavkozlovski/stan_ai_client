@@ -163,7 +163,7 @@ def test_codex_run_text_uses_stdin_and_default_bypass(
     assert argv[-1] == "-"
     assert recorder.calls[0]["input"] == "hello"
     assert "--dangerously-bypass-approvals-and-sandbox" in argv
-    assert argv[argv.index("--model") + 1] == "gpt-5.6-sol"
+    assert argv[argv.index("--model") + 1] == "gpt-6-sol"
     assert 'model_reasoning_effort="medium"' in argv
 
 
@@ -322,7 +322,7 @@ def test_codex_client_init_defaults() -> None:
     client = CodexClient()
 
     assert client.executable == "codex"
-    assert client.default_model == "gpt-5.6-sol"
+    assert client.default_model == "gpt-6-sol"
     assert client.default_reasoning_effort == "medium"
     assert client.default_timeout_seconds == 120.0
 

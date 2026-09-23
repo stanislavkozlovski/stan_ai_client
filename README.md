@@ -169,8 +169,8 @@ result = client.run_text("Reply with the single word: ok")
 print(result.text)
 ```
 
-`CodexClient` targets `codex exec` and defaults to `gpt-5.6-sol` with `medium`
-reasoning effort. GPT-5.6's `max` effort is available through
+`CodexClient` targets `codex exec` and defaults to `gpt-6-sol` with `medium`
+reasoning effort. GPT-6 Sol's `max` effort is available through
 `default_reasoning_effort` or `CodexRunOptions(reasoning_effort="max")`.
 By default it passes
 `--dangerously-bypass-approvals-and-sandbox`, matching the current automation
