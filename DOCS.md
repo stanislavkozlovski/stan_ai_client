@@ -74,11 +74,11 @@ Effort values are named by provider so signatures and editor hints do not imply
 that values can be exchanged across CLIs:
 
 ```python
-ClaudeEffort = Literal["low", "medium", "high", "max"]
+ClaudeEffort = Literal["low", "medium", "high", "xhigh", "max"]
 CodexReasoningEffort = Literal[
     "minimal", "low", "medium", "high", "xhigh", "max"
 ]
-GrokEffort = Literal["low", "medium", "high", "max"]
+GrokEffort = Literal["low", "medium", "high", "xhigh", "max"]
 ```
 
 These types are exported from `stan_ai_client`. The generic `Effort` and
@@ -86,6 +86,8 @@ These types are exported from `stan_ai_client`. The generic `Effort` and
 backward compatibility, but new code should use the provider-specific names.
 The selected provider CLI remains responsible for validating whether a specific
 model supports a value.
+For `grok-4.7`, use `low`, `medium`, `high`, or `xhigh`; `max` remains available
+in the type for model overrides that support it.
 
 ### `ClaudeCodeClient`
 
@@ -95,7 +97,7 @@ class ClaudeCodeClient:
         self,
         *,
         executable: str = "claude",
-        default_model: str = "claude-opus-4-8",
+        default_model: str = "claude-opus-5-5",
         default_effort: ClaudeEffort = "max",
         default_timeout_seconds: float = 120.0,
         default_options: RunOptions | None = None,
@@ -182,7 +184,7 @@ class GrokClient:
         self,
         *,
         executable: str = "grok",
-        default_model: str = "grok-4.5",
+        default_model: str = "grok-4.7",
         default_effort: GrokEffort | None = None,
         default_timeout_seconds: float = 120.0,
         default_options: GrokRunOptions | None = None,
@@ -192,7 +194,7 @@ class GrokClient:
 ```
 
 GrokClient drives `grok --no-auto-update -p`. It always passes `--model`
-(defaulting to xAI's current Grok model, `grok-4.5`). Prompt delivery is
+(defaulting to `grok-4.7`). Prompt delivery is
 handled transparently inside the client.
 
 ## StructuredSchema

@@ -33,7 +33,7 @@ from stan_ai_client.types import GrokJsonPayload
 def test_grok_client_init_defaults() -> None:
     client = GrokClient()
     assert client.executable == "grok"
-    assert client.default_model == "grok-4.5"
+    assert client.default_model == "grok-4.7"
     assert client.default_timeout_seconds == 120.0
 
 
@@ -56,7 +56,20 @@ def test_run_text_success(mock_exec: Mock) -> None:
     assert "grok" in " ".join(argv)
     assert "--no-auto-update" in argv
     assert "--model" in argv
-    assert argv[argv.index("--model") + 1] == "grok-4.5"
+    assert argv[argv.index("--model") + 1] == "grok-4.7"
+    assert "--effort" not in argv
+
+
+@patch("stan_ai_client.grok.execute_command")
+def test_run_text_passes_xhigh_effort(mock_exec: Mock) -> None:
+    mock_exec.return_value.stdout = "ok\n"
+    mock_exec.return_value.stderr = ""
+    mock_exec.return_value.returncode = 0
+
+    GrokClient().run_text("hello", options=GrokRunOptions(effort="xhigh"))
+
+    argv = mock_exec.call_args[0][0].argv
+    assert argv[argv.index("--effort") + 1] == "xhigh"
 
 
 @patch("stan_ai_client.grok.execute_command")

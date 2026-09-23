@@ -4,9 +4,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Generic, Literal, Mapping, TypeVar
 
-ClaudeEffort = Literal["low", "medium", "high", "max"]
+ClaudeEffort = Literal["low", "medium", "high", "xhigh", "max"]
 CodexReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh", "max"]
-GrokEffort = Literal["low", "medium", "high", "max"]
+GrokEffort = Literal["low", "medium", "high", "xhigh", "max"]
 
 # Backward-compatible aliases. New code should use the provider-specific names.
 Effort = ClaudeEffort

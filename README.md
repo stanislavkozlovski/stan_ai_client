@@ -110,7 +110,7 @@ from pathlib import Path
 from stan_ai_client import ClaudeCodeClient, RunOptions
 
 client = ClaudeCodeClient(
-    default_model="claude-opus-4-8",
+    default_model="claude-opus-5-5",
     default_effort="max",
     default_timeout_seconds=180,
 )
@@ -237,7 +237,7 @@ Structured Codex runs may also resume existing sessions with `session_id` or
 ```python
 from stan_ai_client import GrokClient, GrokRunOptions, StructuredSchema
 
-client = GrokClient()  # defaults to model="grok-4.5"
+client = GrokClient()  # defaults to model="grok-4.7"
 
 result = client.run_text("Reply with the single word: ok")
 print(result.text)

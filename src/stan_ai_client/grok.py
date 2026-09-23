@@ -101,7 +101,7 @@ class GrokClient:
         self,
         *,
         executable: str = "grok",
-        default_model: str = "grok-4.5",
+        default_model: str = "grok-4.7",
         default_effort: GrokEffort | None = None,
         default_timeout_seconds: float = 120.0,
         default_options: GrokRunOptions | None = None,
