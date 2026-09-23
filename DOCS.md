@@ -135,8 +135,8 @@ class CodexClient:
         self,
         *,
         executable: str = "codex",
-        default_model: str = "gpt-5.6-sol",
-        default_reasoning_effort: CodexReasoningEffort = "medium",
+        default_model: str = "gpt-6-sol",
+        default_reasoning_effort: CodexReasoningEffort = "max",
         default_permission_mode: Literal[
             "default", "bypassPermissions", "auto"
         ] = "bypassPermissions",
