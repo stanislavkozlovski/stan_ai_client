@@ -149,7 +149,7 @@ class CodexClient:
         self,
         *,
         executable: str = "codex",
-        default_model: str = "gpt-6-sol",
+        default_model: str = "gpt-6.1-sol",
         default_reasoning_effort: CodexReasoningEffort = "max",
         default_permission_mode: CodexPermissionMode = "bypassPermissions",
         default_timeout_seconds: float = 120.0,

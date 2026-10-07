@@ -169,7 +169,7 @@ result = client.run_text("Reply with the single word: ok")
 print(result.text)
 ```
 
-`CodexClient` targets `codex exec` and defaults to `gpt-6-sol` with `max`
+`CodexClient` targets `codex exec` and defaults to `gpt-6.1-sol` with `max`
 reasoning effort. Override the effort through `default_reasoning_effort` or
 `CodexRunOptions(reasoning_effort="medium")`.
 By default it passes
