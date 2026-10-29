@@ -97,8 +97,8 @@ class ClaudeCodeClient:
         self,
         *,
         executable: str = "claude",
-        default_model: str = "claude-opus-5-5",
-        default_effort: ClaudeEffort = "max",
+        default_model: str | None = "claude-opus-5-5",
+        default_effort: ClaudeEffort | None = "max",
         default_timeout_seconds: float = 120.0,
         default_options: RunOptions | None = None,
         logger: logging.Logger | None = None,
@@ -727,6 +727,7 @@ Provider-specific exceptions remain available:
 - `ClaudeExecutableNotFoundError`
 - `ClaudeTimeoutError`
 - `ClaudeProcessError`
+- `ClaudeSessionNotFoundError` (failed explicit resume with missing local history)
 - `ClaudeApprovalRequiredError`
 - `ClaudeNetworkUnavailableError`
 - `ClaudeProtocolError`
@@ -947,3 +948,12 @@ Keep these concerns outside the library:
 - YAML or domain-object parsing
 - business scheduling and persistence around long-running work
 - app-specific logging policy beyond execution metadata
+
+`ClaudeCodeClient(default_model=None, default_effort=None)` omits `--model` and
+`--effort` so Claude chooses its configured defaults. Explicit `RunOptions`
+values take precedence over constructor defaults.
+
+`ClaudeSessionNotFoundError` preserves the command, return code, stdout, stderr,
+and parsed payload of `ClaudeProcessError`. It is classified only for a failed
+command containing `--resume`, when stderr, stdout, or the payload result reports
+missing conversation history. Rate-limit and network errors are classified first.

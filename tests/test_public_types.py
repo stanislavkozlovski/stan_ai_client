@@ -7,6 +7,7 @@ from stan_ai_client import (
     ClaudeEffort,
     ClaudeNetworkUnavailableError,
     ClaudeProcessError,
+    ClaudeSessionNotFoundError,
     CodexCodeError,
     CodexApprovalRequiredError,
     CodexNetworkUnavailableError,
@@ -75,3 +76,8 @@ def test_network_exception_types_are_public_and_provider_compatible() -> None:
     assert issubclass(GrokNetworkUnavailableError, NetworkUnavailableError)
     assert issubclass(GrokNetworkUnavailableError, GrokProcessError)
     assert issubclass(GrokNetworkUnavailableError, GrokCodeError)
+
+
+def test_missing_session_error_is_public_and_process_compatible() -> None:
+    assert issubclass(ClaudeSessionNotFoundError, ClaudeProcessError)
+    assert issubclass(ClaudeSessionNotFoundError, ClaudeCodeError)

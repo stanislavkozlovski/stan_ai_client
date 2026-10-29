@@ -545,3 +545,16 @@ unsupported Codex resume flags, use `CodexRunOptions(resume_extra_args=...)`.
 pytest
 mypy src tests
 ```
+
+### Inheriting Claude defaults and recovering missing history
+
+Pass `ClaudeCodeClient(default_model=None, default_effort=None)` to omit both
+CLI overrides and inherit Claude's configured model and effort. Per-call
+`RunOptions(model=..., effort=...)` still overrides them. The default constructor
+continues to send `claude-opus-5-5` and `max`.
+
+A failed explicit `RunOptions(session_id=...)` resume whose output reports
+`No conversation found with session ID` raises `ClaudeSessionNotFoundError`,
+a `ClaudeProcessError` subclass. Catch it to retry once without a session.
+Rate-limit and network errors retain precedence; the client never retries a
+missing conversation automatically.

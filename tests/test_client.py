@@ -19,6 +19,7 @@ from stan_ai_client import (
     ClaudeLimitError,
     ClaudeNetworkUnavailableError,
     ClaudeProcessError,
+    ClaudeSessionNotFoundError,
     ClaudeProtocolError,
     ClaudeRateLimitError,
     ClaudeStructuredOutputMissingError,
@@ -1079,3 +1080,66 @@ def test_run_structured_raises_protocol_error_on_non_json_output(
         )
 
     assert "structured mode" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("model,effort", [(None, None), (None, "high"), ("custom", None)])
+def test_claude_can_inherit_cli_defaults(
+    monkeypatch: pytest.MonkeyPatch, model: str | None, effort: Any,
+) -> None:
+    recorder = RunRecorder(subprocess.CompletedProcess([], 0, '{"result":"ok"}', ""))
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+    client = ClaudeCodeClient(default_model=model, default_effort=effort)
+    client.run_json("hello")
+    argv = recorder.calls[0]["argv"]
+    assert ("--model" in argv) == (model is not None)
+    assert ("--effort" in argv) == (effort is not None)
+    client.run_json("hello", options=RunOptions(model="override", effort="low"))
+    argv = recorder.calls[1]["argv"]
+    assert argv[argv.index("--model") + 1] == "override"
+    assert argv[argv.index("--effort") + 1] == "low"
+
+
+def test_claude_constructor_defaults_stay_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = RunRecorder(subprocess.CompletedProcess([], 0, '{"result":"ok"}', ""))
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+    ClaudeCodeClient().run_json("hello")
+    argv = recorder.calls[0]["argv"]
+    assert argv[argv.index("--model") + 1] == "claude-opus-5-5"
+    assert argv[argv.index("--effort") + 1] == "max"
+
+
+@pytest.mark.parametrize("location", ["stderr", "stdout", "result"])
+@pytest.mark.parametrize("resumed", [False, True])
+def test_missing_session_error_requires_explicit_resume(
+    monkeypatch: pytest.MonkeyPatch, location: str, resumed: bool,
+) -> None:
+    marker = "No conversation found with session ID gone"
+    stdout, stderr = "", ""
+    if location == "result":
+        stdout = json.dumps({"is_error": True, "result": marker})
+    elif location == "stdout":
+        stdout = marker
+    else:
+        stderr = marker
+    recorder = RunRecorder(subprocess.CompletedProcess([], 1, stdout, stderr))
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+    with pytest.raises(ClaudeProcessError) as excinfo:
+        ClaudeCodeClient().run_json("hello", options=RunOptions(session_id="gone" if resumed else None))
+    assert type(excinfo.value) is (ClaudeSessionNotFoundError if resumed else ClaudeProcessError)
+    assert excinfo.value.stdout == stdout
+    assert excinfo.value.stderr == stderr
+    assert excinfo.value.returncode == 1
+
+
+@pytest.mark.parametrize("network", [False, True])
+def test_missing_session_keeps_limit_and_network_precedence(
+    monkeypatch: pytest.MonkeyPatch, network: bool,
+) -> None:
+    evidence = "Unable to connect to API" if network else "429 rate limit exceeded, retry after 5"
+    recorder = RunRecorder(subprocess.CompletedProcess(
+        [], 1, "", "No conversation found with session ID gone\n" + evidence,
+    ))
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+    expected = ClaudeNetworkUnavailableError if network else ClaudeRateLimitError
+    with pytest.raises(expected):
+        ClaudeCodeClient().run_json("hello", options=RunOptions(session_id="gone"))
