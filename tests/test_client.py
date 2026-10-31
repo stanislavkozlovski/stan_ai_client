@@ -12,6 +12,7 @@ from stan_ai_client import (
     AIClientTimeoutError,
     ApprovalRequiredError,
     ClaudeApprovalRequiredError,
+    ClaudeCapacityError,
     ClaudeCodeError,
     ClaudeCodeClient,
     CommandMetadata,
@@ -518,7 +519,7 @@ def test_run_json_raises_rate_limit_error(monkeypatch: pytest.MonkeyPatch) -> No
     assert not isinstance(excinfo.value, NetworkUnavailableError)
 
 
-def test_claude_overloaded_api_error_remains_a_rate_limit(
+def test_claude_overloaded_api_error_is_capacity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     diagnostic = (
@@ -534,10 +535,11 @@ def test_claude_overloaded_api_error_remains_a_rate_limit(
     )
     monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
 
-    with pytest.raises(ClaudeRateLimitError) as excinfo:
+    with pytest.raises(ClaudeCapacityError) as excinfo:
         ClaudeCodeClient().run_json("hello")
 
     assert not isinstance(excinfo.value, NetworkUnavailableError)
+    assert not isinstance(excinfo.value, ClaudeRateLimitError)
 
 
 def test_claude_stderr_rate_limit_precedes_network_payload(
@@ -715,9 +717,12 @@ def test_rate_limit_policy_refuses_non_positive_retry_wait(
         raise error
 
     with pytest.raises(ClaudeRateLimitError) as excinfo:
-        client._run_with_rate_limit_policy(
-            operation,
+        client._run_with_retry_policies(
+            lambda request: operation(),
+            prompt="work",
+            model=None,
             rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=0),
+            provider_retry_policy=None,
         )
 
     assert excinfo.value is error

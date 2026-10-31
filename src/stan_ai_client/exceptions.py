@@ -3,7 +3,14 @@ from __future__ import annotations
 from datetime import datetime
 
 from .rate_limits import RateLimitInfo
-from .types import ClaudeJsonPayload, CodexJsonPayload, CommandMetadata, GrokJsonPayload
+from .types import (
+    ClaudeJsonPayload,
+    CodexJsonPayload,
+    CommandMetadata,
+    FailedAttempt,
+    GrokJsonPayload,
+    ProviderFailure,
+)
 
 AIPayload = ClaudeJsonPayload | CodexJsonPayload | GrokJsonPayload
 
@@ -68,6 +75,55 @@ class ApprovalRequiredError(ProcessError):
 
 class NetworkUnavailableError(ProcessError):
     """Strong evidence that a provider transport was unavailable."""
+
+
+class ProviderError(ProcessError):
+    """A classified provider failure, retaining the original process evidence."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        command: CommandMetadata,
+        returncode: int,
+        stdout: str,
+        stderr: str,
+        payload: AIPayload | None,
+        failure: ProviderFailure,
+    ) -> None:
+        self.failure = failure
+        super().__init__(
+            message, command=command, returncode=returncode,
+            stdout=stdout, stderr=stderr, payload=payload,
+        )
+
+    @property
+    def signal(self) -> str:
+        return self.failure.signal
+
+    @property
+    def retry_after_seconds(self) -> float | None:
+        return self.failure.retry_after_seconds
+
+
+class CapacityError(ProviderError):
+    """The selected provider model is temporarily at capacity."""
+
+
+class ServerError(ProviderError):
+    """The provider returned HTTP 500, 502, 503, or 504."""
+
+
+class ServerErrorWindowExceeded(AIClientError):
+    def __init__(self, message: str, *, attempts: tuple[FailedAttempt, ...]) -> None:
+        self.attempts = attempts
+        super().__init__(message)
+
+
+class ProviderRetryCancelled(AIClientError):
+    def __init__(self, message: str, *, attempts: tuple[FailedAttempt, ...]) -> None:
+        self.attempts = attempts
+        super().__init__(message)
 
 
 class ProtocolError(AIClientError):
@@ -173,6 +229,14 @@ class ClaudeProcessError(ProcessError, ClaudeCodeError):
     payload: ClaudeJsonPayload | None
 
 
+class ClaudeCapacityError(CapacityError, ClaudeProcessError):
+    pass
+
+
+class ClaudeServerError(ServerError, ClaudeProcessError):
+    pass
+
+
 class ClaudeSessionNotFoundError(ClaudeProcessError):
     """The explicitly resumed conversation is absent from Claude's history."""
 
@@ -271,6 +335,14 @@ class CodexTimeoutError(AIClientTimeoutError, CodexCodeError):
 
 class CodexProcessError(ProcessError, CodexCodeError):
     payload: CodexJsonPayload | None
+
+
+class CodexCapacityError(CapacityError, CodexProcessError):
+    pass
+
+
+class CodexServerError(ServerError, CodexProcessError):
+    pass
 
 
 class CodexApprovalRequiredError(ApprovalRequiredError, CodexProcessError):

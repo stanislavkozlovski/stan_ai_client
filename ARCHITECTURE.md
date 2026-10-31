@@ -28,6 +28,14 @@ policy is a synchronous wrapper around one-attempt execution: it catches the
 client's typed rate-limit exception, sleeps only when parsed reset metadata fits
 the caller's wait budget, logs the wait, and retries the same operation.
 
+Claude and Codex raise typed capacity and server errors, classified before
+quota and network checks from Claude's native API status or the trusted
+diagnostics that network detection reads. Their modes can also opt into a
+`ProviderRetryPolicy`, which runs outside the rate-limit wrapper: it waits with
+cancellable backoff and resends the original prompt prefixed with
+`PROVIDER_RETRY_PREFIX`. Neither wrapper resets the other's budget, so one call
+keeps a single quota wait budget and a single server-error window.
+
 ## Execution Flow
 
 ### Automatic permission review
@@ -50,7 +58,7 @@ client-side.
 
 ### Claude text mode
 
-1. `ClaudeCodeClient.run_text()` applies an optional `RateLimitRetryPolicy`
+1. `ClaudeCodeClient.run_text()` applies optional provider and rate-limit retries
 2. single-attempt text execution resolves `RunOptions`
 3. `client._prepare()` builds `claude -p --output-format text`
 4. `transport.execute_command()` runs the subprocess
@@ -58,7 +66,7 @@ client-side.
 
 ### Claude JSON mode
 
-1. `ClaudeCodeClient.run_json()` applies an optional `RateLimitRetryPolicy`
+1. `ClaudeCodeClient.run_json()` applies optional provider and rate-limit retries
 2. single-attempt JSON execution forces `--output-format json`
 3. `transport.execute_command()` runs Claude
 4. `parser.try_parse_json_payload()` parses the JSON envelope
@@ -69,7 +77,7 @@ client-side.
 
 1. The caller builds `StructuredSchema.from_dict(...)`
 2. `schema.py` validates the JSON Schema locally with `jsonschema`
-3. `ClaudeCodeClient.run_structured()` applies an optional `RateLimitRetryPolicy`
+3. `ClaudeCodeClient.run_structured()` applies optional provider and rate-limit retries
 4. single-attempt execution adds `--json-schema <schema.cli_json>`
 5. Claude runs in JSON mode and returns the normal JSON envelope
 6. `client` requires `payload.structured_output` to be present
@@ -78,7 +86,7 @@ client-side.
 
 ### Codex text mode
 
-1. `CodexClient.run_text()` applies an optional `RateLimitRetryPolicy`
+1. `CodexClient.run_text()` applies optional provider and rate-limit retries
 2. single-attempt text execution resolves `CodexRunOptions`
 3. `codex.py` builds `codex exec`, using stdin by default
 4. `transport.execute_command()` runs the subprocess
@@ -89,7 +97,7 @@ By default, Codex runs with `--dangerously-bypass-approvals-and-sandbox`. Set
 
 ### Codex JSON mode
 
-1. `CodexClient.run_json()` applies an optional `RateLimitRetryPolicy`
+1. `CodexClient.run_json()` applies optional provider and rate-limit retries
 2. single-attempt JSON execution adds `--json`
 3. `transport.execute_command()` runs Codex
 4. `codex_parser.try_parse_codex_jsonl_payload()` parses JSONL events
@@ -136,6 +144,12 @@ facts into disjoint token allocations without I/O or consumer context.
   exception hierarchy
 - `src/stan_ai_client/_network.py`: provider-aware transport-connectivity
   detection over provider-declared error records and guarded process diagnostics
+- `src/stan_ai_client/provider_errors.py`: Claude/Codex capacity and
+  server-error classification over those trusted diagnostics, with retry hints
+- `src/stan_ai_client/provider_retry.py`: `ProviderRetryPolicy`, backoff, the
+  cancellable provider retry loop, and the failed-attempt table
+- `src/stan_ai_client/_retry.py`: the rate-limit retry loop and its composition
+  with provider retries
 - `src/stan_ai_client/rate_limits.py`: rate-limit parsing helpers
 
 ## Logging
@@ -145,7 +159,8 @@ The clients use stdlib `logging`.
 - `INFO`: run start and finish metadata
 - `DEBUG`: redacted argv, payload metadata, and structured-output validation events
 - `WARNING` / `ERROR`: protocol failures, process failures, network failures, rate limits,
-  rate-limit retry waits, wait-budget refusals, missing executable, and timeouts
+  rate-limit retry waits, wait-budget refusals, capacity/server retry waits,
+  missing executable, and timeouts
 
 Prompt text is only logged when `log_prompts=True`.
 

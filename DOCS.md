@@ -806,8 +806,8 @@ inspects JSONL errors and JSON-mode stderr (also for structured usage capture);
 because text- and default structured-mode
 stderr also carries progress, only `ERROR:`-prefixed lines are inspected in
 those modes. Ordinary transcripts, prompts, documentation, diffs, and
-successful output are not searched. Rate-limit evidence on any of those
-diagnostic channels retains precedence. A bare stream disconnect remains the
+successful output are not searched. Capacity/server evidence takes precedence
+over rate limits, and rate limits take precedence over network errors. A bare stream disconnect remains the
 provider's ordinary process error. The library does not sleep, retry, or impose
 scheduling policy for this condition.
 
@@ -831,6 +831,88 @@ Behavior:
 - if the next wait exceeds the remaining `max_wait_seconds` budget, the client
   re-raises the same typed rate-limit error
 - each retry sleep is logged at `WARNING`
+
+## Provider Capacity and Server Errors
+
+Claude and Codex classify provider failures before quota and network checks.
+`CapacityError` and `ServerError` inherit `ProviderError`, which inherits
+`ProcessError`. Concrete types also retain their provider hierarchy:
+
+| Provider | Capacity | Server |
+|---|---|---|
+| Claude | `ClaudeCapacityError` | `ClaudeServerError` |
+| Codex | `CodexCapacityError` | `CodexServerError` |
+
+All preserve `command`, `returncode`, `stdout`, `stderr`, and `payload`, and
+expose `failure: ProviderFailure`, `signal`, and `retry_after_seconds`.
+`ProviderFailure` contains `kind` (`capacity` or `server_error`), `signal`,
+`message`, and optional `retry_after_seconds`.
+
+Claude's failed result `api_error_status=529` means capacity; 500, 502, 503,
+and 504 mean server failure. The native status wins over message matching.
+Fallbacks recognize `API Error: <status>` and `Repeated 529 Overloaded errors`
+in the same trusted diagnostics as network detection. Codex recognizes
+`Selected model is at capacity`, `currently experiencing high demand`, and
+the server statuses in `unexpected status <status>` or
+`exceeded retry limit, last status: <status>` diagnostics. Its exec JSONL
+error events carry messages, not rollout `codex_error_info` codes.
+
+`classify_provider_failure(error, *, codex_output_protocol="unstructured")`
+exports this classifier for controllers with process evidence. It returns
+`ProviderFailure | None`. The default guards Codex stderr with `ERROR:`;
+pass `"jsonl"` only for JSON exec mode, whose stderr is diagnostic. Model and
+tool output are never classifier inputs. HTTP `Retry-After` seconds or dates
+in trusted diagnostics supply retry hints, without the quota parser's buffer.
+Grok classification is unchanged. In particular, bare `overloaded` remains a
+rate-limit marker, while a Claude 529 is now a capacity error and is no longer
+caught by `ClaudeRateLimitError` or `LimitError`.
+
+`ProviderRetryPolicy` enables retries on Claude/Codex `run_text`, `run_json`,
+and `run_structured` through the `provider_retry_policy` keyword. The default
+is `None`, so existing calls never gain an implicit wait. Policy fields are:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `first_delay` | `15.0` | First backoff, in seconds |
+| `max_delay` | `900.0` | Backoff cap before jitter, in seconds |
+| `jitter` | `0.2` | Fractional random variation (±20%) |
+| `server_window` | `36000.0` | Seconds from the first server error |
+| `cancel` | A new `threading.Event` | Interrupts retry waits when set |
+
+`retry_delay(attempt, hint, policy)` is shared with external schedulers.
+Attempts start at 1, exponential backoff doubles to the cap, and a valid
+provider hint wins unchanged over the cap and jitter. Capacity has no attempt
+or elapsed-time limit. Server retries stop if their next retry would land
+after the window, including call execution time and intervening waits;
+capacity failures do not reset that clock. A retry exactly at the deadline
+is allowed. An in-flight call is governed by its existing timeout.
+
+`run_with_provider_retry(call, prompt, policy, *, logger=None,
+provider="Provider", model=None)` runs a callable accepting the prompt.
+It catches only the typed capacity/server errors; unrelated errors and
+interrupts propagate. Each retry sends `PROVIDER_RETRY_PREFIX + prompt`,
+using the original prompt so prefixes never accumulate:
+
+```text
+We just ran this, but it failed on a provider capacity limit or server error. Retry and continue the work:
+
+```
+
+The helper logs the provider, model, kind, signal, attempt, and next retry
+time at `WARNING`. Set the policy's cancel event to stop a wait, or interrupt
+the calling process as usual. Cancellation does not kill an in-flight CLI or
+change the existing quota-wait policy. Combining both retry policies preserves
+the cumulative quota wait budget and the server window across alternating
+errors. Client call options, schema, and selected model stay unchanged.
+
+`ServerErrorWindowExceeded` and `ProviderRetryCancelled` inherit
+`AIClientError`. Each exposes `attempts: tuple[FailedAttempt, ...]` and includes
+the error table in its message. `FailedAttempt` pairs `when` (an aware datetime)
+with `failure`. `render_failed_attempts(attempts)` renders Sofia local times,
+collapses consecutive identical errors into one row, and escapes each error's
+first line truncated to 200 characters. On exhaustion, `__cause__` retains the
+last provider process error. A controller should use these helpers or enable
+the client's policy, with one retry owner per operation.
 
 ## Logging
 
@@ -866,6 +948,7 @@ At `WARNING` or `ERROR`:
 - process errors
 - rate-limit details
 - rate-limit retry waits and wait-budget refusals
+- capacity/server retry waits and their next retry times
 
 Prompt text is not logged unless `log_prompts=True`.
 
