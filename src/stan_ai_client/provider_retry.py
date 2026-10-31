@@ -120,16 +120,13 @@ def run_with_provider_retry(
     logger = logger if logger is not None else logging.getLogger("stan_ai_client")
     attempts: list[FailedAttempt] = []
     server_since: float | None = None
+    last_error: CapacityError | ServerError | None = None
     request = prompt
-    while True:
-        if policy.cancel.is_set():
-            raise ProviderRetryCancelled(
-                "Provider retry cancelled.\n\n" + render_failed_attempts(attempts),
-                attempts=tuple(attempts),
-            )
+    while not policy.cancel.is_set():
         try:
             return call(request)
         except (CapacityError, ServerError) as error:
+            last_error = error
             now = datetime.now(timezone.utc)
             attempts.append(FailedAttempt(now, error.failure))
             delay = retry_delay(len(attempts), error.retry_after_seconds, policy)
@@ -154,8 +151,10 @@ def run_with_provider_retry(
                 delay,
             )
             if policy.cancel.wait(delay):
-                raise ProviderRetryCancelled(
-                    "Provider retry cancelled.\n\n" + render_failed_attempts(attempts),
-                    attempts=tuple(attempts),
-                ) from error
+                break
             request = PROVIDER_RETRY_PREFIX + prompt
+    # Every cancellation exits here, chained to the last provider error, if any.
+    raise ProviderRetryCancelled(
+        "Provider retry cancelled.\n\n" + render_failed_attempts(attempts),
+        attempts=tuple(attempts),
+    ) from last_error

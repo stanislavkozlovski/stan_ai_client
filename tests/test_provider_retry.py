@@ -218,21 +218,31 @@ def test_server_hint_beyond_window_refuses_sleep() -> None:
     assert clock.waits == []
 
 
-@pytest.mark.parametrize("cancel_before", [True, False])
-def test_cancellation_stops_without_another_call(cancel_before: bool) -> None:
-    clock = FakeWait(cancel_after=1)
-    if cancel_before:
+class LateCancel(FakeWait):
+    """Cancellation lands just after a wait has already timed out."""
+
+    def wait(self, timeout: float | None = None) -> bool:
+        super().wait(timeout)
+        return False
+
+
+@pytest.mark.parametrize("cancel", ["before_call", "during_wait", "after_wait"])
+def test_cancellation_stops_without_another_call(cancel: str) -> None:
+    clock = (LateCancel if cancel == "after_wait" else FakeWait)(cancel_after=1)
+    if cancel == "before_call":
         clock.set()
     calls = []
+    error = failure()
 
     def call(prompt: str) -> None:
         calls.append(prompt)
-        raise failure()
+        raise error
 
     with pytest.raises(ProviderRetryCancelled) as caught:
         run_with_provider_retry(call, "work", ProviderRetryPolicy(cancel=clock))
-    assert len(calls) == (0 if cancel_before else 1)
+    assert len(calls) == (0 if cancel == "before_call" else 1)
     assert len(caught.value.attempts) == len(calls)
+    assert caught.value.__cause__ is (error if calls else None)
 
 
 @pytest.mark.parametrize("policy", [None, ProviderRetryPolicy()])
