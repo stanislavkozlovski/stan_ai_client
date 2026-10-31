@@ -173,6 +173,10 @@ class ClaudeProcessError(ProcessError, ClaudeCodeError):
     payload: ClaudeJsonPayload | None
 
 
+class ClaudeSessionNotFoundError(ClaudeProcessError):
+    """The explicitly resumed conversation is absent from Claude's history."""
+
+
 class ClaudeApprovalRequiredError(ApprovalRequiredError, ClaudeProcessError):
     payload: ClaudeJsonPayload
 

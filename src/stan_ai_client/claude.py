@@ -23,6 +23,7 @@ from .exceptions import (
     ClaudeProcessError,
     ClaudeProtocolError,
     ClaudeRateLimitError,
+    ClaudeSessionNotFoundError,
     ClaudeStructuredOutputMissingError,
     ClaudeStructuredOutputValidationError,
     ClaudeTimeoutError,
@@ -58,8 +59,8 @@ TStructured = TypeVar("TStructured")
 @dataclass(frozen=True)
 class ResolvedRunOptions:
     cwd: str | Path | None
-    model: str
-    effort: ClaudeEffort
+    model: str | None
+    effort: ClaudeEffort | None
     timeout_seconds: float
     input_mode: str
     allowed_tools: tuple[str, ...] | None
@@ -82,8 +83,8 @@ class ClaudeCodeClient:
         self,
         *,
         executable: str = "claude",
-        default_model: str = "claude-opus-5-5",
-        default_effort: ClaudeEffort = "max",
+        default_model: str | None = "claude-opus-5-5",
+        default_effort: ClaudeEffort | None = "max",
         default_timeout_seconds: float = 120.0,
         default_options: RunOptions | None = None,
         logger: logging.Logger | None = None,
@@ -311,8 +312,10 @@ class ClaudeCodeClient:
         argv.extend(["--output-format", output_format])
         if json_schema is not None:
             argv.extend(["--json-schema", json_schema.cli_json])
-        argv.extend(["--model", effective.model])
-        argv.extend(["--effort", effective.effort])
+        if effective.model is not None:
+            argv.extend(["--model", effective.model])
+        if effective.effort is not None:
+            argv.extend(["--effort", effective.effort])
 
         if effective.allowed_tools is not None:
             argv.extend(["--allowed-tools", ",".join(effective.allowed_tools)])
@@ -518,7 +521,11 @@ class ClaudeCodeClient:
                 error_text,
             )
         else:
-            error_cls = ClaudeProcessError
+            missing_session = "--resume" in command.argv and any(
+                "No conversation found with session ID" in text
+                for text in (stderr, stdout, payload.result if payload and payload.result else "")
+            )
+            error_cls = ClaudeSessionNotFoundError if missing_session else ClaudeProcessError
             self.logger.warning(
                 "Claude run failed returncode=%d elapsed_ms=%.0f error=%s",
                 returncode,
