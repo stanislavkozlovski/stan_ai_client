@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Generic, Literal, Mapping, TypeVar
 
@@ -127,6 +128,22 @@ class CommandMetadata:
     argv: tuple[str, ...]
     cwd: str | None
     elapsed_ms: float
+
+
+@dataclass(frozen=True)
+class ProviderFailure:
+    """A capacity or server failure extracted from provider diagnostics."""
+
+    kind: Literal["capacity", "server_error"]
+    signal: str
+    message: str
+    retry_after_seconds: float | None = None
+
+
+@dataclass(frozen=True)
+class FailedAttempt:
+    when: datetime
+    failure: ProviderFailure
 
 
 @dataclass(frozen=True)

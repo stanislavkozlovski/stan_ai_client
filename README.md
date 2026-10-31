@@ -17,6 +17,7 @@ The library is intentionally small and pragmatic:
 - local JSON Schema validation
 - rate-limit parsing helpers
 - opt-in rate-limit retry policy
+- opt-in Claude/Codex capacity and server-error retries with cancellation
 - stdlib logging
 
 ## Why Use It
@@ -352,6 +353,36 @@ except ClaudeRateLimitError as exc:
     print(exc.reset_at or exc.retry_after_seconds)
 ```
 
+Claude and Codex can also wait out provider capacity failures and HTTP 500,
+502, 503, and 504 errors. Enable this separately on `run_text`, `run_json`, or
+`run_structured`:
+
+```python
+from stan_ai_client import CodexClient, ProviderRetryPolicy, ServerErrorWindowExceeded
+
+policy = ProviderRetryPolicy()
+try:
+    result = CodexClient().run_json("Continue the analysis.", provider_retry_policy=policy)
+except ServerErrorWindowExceeded as exc:
+    print(exc)  # Includes a table of the failed provider attempts.
+```
+
+Capacity retries until success or cancellation; server errors stop when the
+next retry would exceed 10 hours from the first server error. Waits start at
+15 seconds, double up to 15 minutes before ±20% jitter, and follow a supplied
+`Retry-After` hint unchanged. Every retry prefixes the original prompt with
+an instruction to continue the work already done. Call `policy.cancel.set()`
+from another thread to interrupt a wait; it does not terminate a running CLI.
+
+Without `provider_retry_policy`, both failure kinds raise immediately.
+`ClaudeCapacityError` (including HTTP 529) and `CodexCapacityError` inherit
+`CapacityError`; their server counterparts inherit `ServerError`. They remain
+their provider's `ProcessError` subtypes. **A Claude 529 no longer raises
+`ClaudeRateLimitError`.** Controllers that own their own waits should catch
+the new types and keep client retries disabled. Grok behavior is unchanged.
+See [the retry API](./DOCS.md#provider-capacity-and-server-errors) for the shared
+classifier, backoff helper, and table renderer.
+
 Catch `NetworkUnavailableError` to handle strong provider transport-connectivity
 failures the same way for Claude, Codex, and Grok. Provider-specific catches
 remain available through `ClaudeNetworkUnavailableError`,
@@ -374,9 +405,9 @@ and `Error:` for Grok). Codex inspects JSONL errors and JSON-mode stderr; becaus
 text- and structured-mode stderr also carries progress, only `ERROR:`-prefixed
 lines are inspected in those modes. Claude's declared `Unable to connect to API`
 and `Connection closed mid-response` errors are also recognized. Ordinary model
-output, prompts, and diffs are not inspected. Rate limits retain precedence
-across those diagnostic channels; retry and scheduling policy belongs to the
-caller.
+output, prompts, and diffs are not inspected. Capacity and server failures
+take precedence over rate limits, which retain precedence over network errors;
+retry and scheduling policy belongs to the caller.
 
 ## Public Surface
 

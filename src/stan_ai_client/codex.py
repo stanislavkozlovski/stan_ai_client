@@ -20,7 +20,7 @@ from ._network import (
     codex_trusted_error_texts,
     has_network_unavailable_evidence,
 )
-from ._retry import run_with_rate_limit_retry
+from ._retry import run_with_retry_policies
 from .codex_parser import (
     codex_auto_review_denial_text,
     make_codex_structured_payload,
@@ -31,17 +31,21 @@ from .codex_parser import (
 )
 from .exceptions import (
     CodexApprovalRequiredError,
+    CodexCapacityError,
     CodexExecutableNotFoundError,
     CodexNetworkUnavailableError,
     CodexProcessError,
     CodexProtocolError,
     CodexRateLimitError,
     CodexSchemaValidationError,
+    CodexServerError,
     CodexStructuredOutputMissingError,
     CodexStructuredOutputValidationError,
     CodexTimeoutError,
 )
 from .rate_limits import is_rate_limit_text, parse_rate_limit_info
+from .provider_errors import classify_provider_failure
+from .provider_retry import ProviderRetryPolicy
 from .schema import StructuredSchema
 from .transport import PreparedCommand, execute_command
 from .types import (
@@ -172,10 +176,14 @@ class CodexClient:
         *,
         options: CodexRunOptions | None = None,
         rate_limit_policy: RateLimitRetryPolicy | None = None,
+        provider_retry_policy: ProviderRetryPolicy | None = None,
     ) -> TextRunResult:
-        return self._run_with_rate_limit_policy(
-            lambda: self._run_text_once(prompt, options=options),
+        return self._run_with_retry_policies(
+            lambda request: self._run_text_once(request, options=options),
+            prompt=prompt,
+            model=self._resolve_options(options).model,
             rate_limit_policy=rate_limit_policy,
+            provider_retry_policy=provider_retry_policy,
         )
 
     def _run_text_once(
@@ -219,10 +227,14 @@ class CodexClient:
         *,
         options: CodexRunOptions | None = None,
         rate_limit_policy: RateLimitRetryPolicy | None = None,
+        provider_retry_policy: ProviderRetryPolicy | None = None,
     ) -> CodexJsonRunResult:
-        return self._run_with_rate_limit_policy(
-            lambda: self._run_json_once(prompt, options=options),
+        return self._run_with_retry_policies(
+            lambda request: self._run_json_once(request, options=options),
+            prompt=prompt,
+            model=self._resolve_options(options).model,
             rate_limit_policy=rate_limit_policy,
+            provider_retry_policy=provider_retry_policy,
         )
 
     def _run_json_once(
@@ -301,13 +313,17 @@ class CodexClient:
         schema: StructuredSchema[TStructured],
         options: CodexRunOptions | None = None,
         rate_limit_policy: RateLimitRetryPolicy | None = None,
+        provider_retry_policy: ProviderRetryPolicy | None = None,
         capture_usage: bool = False,
     ) -> CodexStructuredRunResult[TStructured]:
-        return self._run_with_rate_limit_policy(
-            lambda: self._run_structured_once(
-                prompt, schema=schema, options=options, capture_usage=capture_usage
+        return self._run_with_retry_policies(
+            lambda request: self._run_structured_once(
+                request, schema=schema, options=options, capture_usage=capture_usage
             ),
+            prompt=prompt,
+            model=self._resolve_options(options).model,
             rate_limit_policy=rate_limit_policy,
+            provider_retry_policy=provider_retry_policy,
         )
 
     def _run_structured_once(
@@ -472,14 +488,20 @@ class CodexClient:
         )
         return result
 
-    def _run_with_rate_limit_policy(
+    def _run_with_retry_policies(
         self,
-        operation: Callable[[], TRun],
+        operation: Callable[[str], TRun],
         *,
+        prompt: str,
+        model: str,
         rate_limit_policy: RateLimitRetryPolicy | None,
+        provider_retry_policy: ProviderRetryPolicy | None,
     ) -> TRun:
-        return run_with_rate_limit_retry(
+        return run_with_retry_policies(
             operation,
+            prompt=prompt,
+            model=model,
+            provider_retry_policy=provider_retry_policy,
             rate_limit_policy=rate_limit_policy,
             logger=self.logger,
             provider="Codex",
@@ -675,6 +697,23 @@ class CodexClient:
                 payload=payload,
                 stdout=stdout,
                 stderr=stderr,
+            )
+        failure = classify_provider_failure(
+            CodexProcessError(
+                error_text, command=command, returncode=returncode,
+                stdout=stdout, stderr=stderr, payload=payload,
+            ),
+            codex_output_protocol=output_protocol,
+        )
+        if failure is not None:
+            provider_error_cls = CodexCapacityError if failure.kind == "capacity" else CodexServerError
+            self.logger.warning(
+                "Codex run failed returncode=%d elapsed_ms=%.0f kind=%s signal=%s error=%s",
+                returncode, command.elapsed_ms, failure.kind, failure.signal, failure.message,
+            )
+            return provider_error_cls(
+                failure.message, command=command, returncode=returncode,
+                stdout=stdout, stderr=stderr, payload=payload, failure=failure,
             )
         rate_limit_text = next(
             (text for text in trusted_texts if is_rate_limit_text(text)),

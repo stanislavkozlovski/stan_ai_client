@@ -15,20 +15,24 @@ from ._network import (
     claude_trusted_error_texts,
     has_claude_network_unavailable_evidence,
 )
-from ._retry import run_with_rate_limit_retry
+from ._retry import run_with_retry_policies
 from .exceptions import (
     ClaudeApprovalRequiredError,
+    ClaudeCapacityError,
     ClaudeExecutableNotFoundError,
     ClaudeNetworkUnavailableError,
     ClaudeProcessError,
     ClaudeProtocolError,
     ClaudeRateLimitError,
+    ClaudeServerError,
     ClaudeSessionNotFoundError,
     ClaudeStructuredOutputMissingError,
     ClaudeStructuredOutputValidationError,
     ClaudeTimeoutError,
 )
 from .parser import summarize_error_text, try_parse_json_payload
+from .provider_errors import classify_provider_failure
+from .provider_retry import ProviderRetryPolicy
 from .rate_limits import is_rate_limit_text, parse_rate_limit_info
 from .schema import StructuredSchema
 from .transport import PreparedCommand, execute_command
@@ -104,10 +108,14 @@ class ClaudeCodeClient:
         *,
         options: RunOptions | None = None,
         rate_limit_policy: RateLimitRetryPolicy | None = None,
+        provider_retry_policy: ProviderRetryPolicy | None = None,
     ) -> TextRunResult:
-        return self._run_with_rate_limit_policy(
-            lambda: self._run_text_once(prompt, options=options),
+        return self._run_with_retry_policies(
+            lambda request: self._run_text_once(request, options=options),
+            prompt=prompt,
+            model=self._resolve_options(options).model,
             rate_limit_policy=rate_limit_policy,
+            provider_retry_policy=provider_retry_policy,
         )
 
     def _run_text_once(self, prompt: str, *, options: RunOptions | None = None) -> TextRunResult:
@@ -158,10 +166,14 @@ class ClaudeCodeClient:
         *,
         options: RunOptions | None = None,
         rate_limit_policy: RateLimitRetryPolicy | None = None,
+        provider_retry_policy: ProviderRetryPolicy | None = None,
     ) -> JsonRunResult:
-        return self._run_with_rate_limit_policy(
-            lambda: self._run_json_once(prompt, options=options),
+        return self._run_with_retry_policies(
+            lambda request: self._run_json_once(request, options=options),
+            prompt=prompt,
+            model=self._resolve_options(options).model,
             rate_limit_policy=rate_limit_policy,
+            provider_retry_policy=provider_retry_policy,
         )
 
     def _run_json_once(self, prompt: str, *, options: RunOptions | None = None) -> JsonRunResult:
@@ -196,10 +208,14 @@ class ClaudeCodeClient:
         schema: StructuredSchema[TStructured],
         options: RunOptions | None = None,
         rate_limit_policy: RateLimitRetryPolicy | None = None,
+        provider_retry_policy: ProviderRetryPolicy | None = None,
     ) -> StructuredRunResult[TStructured]:
-        return self._run_with_rate_limit_policy(
-            lambda: self._run_structured_once(prompt, schema=schema, options=options),
+        return self._run_with_retry_policies(
+            lambda request: self._run_structured_once(request, schema=schema, options=options),
+            prompt=prompt,
+            model=self._resolve_options(options).model,
             rate_limit_policy=rate_limit_policy,
+            provider_retry_policy=provider_retry_policy,
         )
 
     def _run_structured_once(
@@ -272,14 +288,20 @@ class ClaudeCodeClient:
         )
         return result
 
-    def _run_with_rate_limit_policy(
+    def _run_with_retry_policies(
         self,
-        operation: Callable[[], TRun],
+        operation: Callable[[str], TRun],
         *,
+        prompt: str,
+        model: str | None,
         rate_limit_policy: RateLimitRetryPolicy | None,
+        provider_retry_policy: ProviderRetryPolicy | None,
     ) -> TRun:
-        return run_with_rate_limit_retry(
+        return run_with_retry_policies(
             operation,
+            prompt=prompt,
+            model=model,
+            provider_retry_policy=provider_retry_policy,
             rate_limit_policy=rate_limit_policy,
             logger=self.logger,
             provider="Claude",
@@ -487,6 +509,20 @@ class ClaudeCodeClient:
             stdout=stdout,
             stderr=stderr,
         )
+        failure = classify_provider_failure(ClaudeProcessError(
+            error_text, command=command, returncode=returncode,
+            stdout=stdout, stderr=stderr, payload=payload,
+        ))
+        if failure is not None:
+            provider_error_cls = ClaudeCapacityError if failure.kind == "capacity" else ClaudeServerError
+            self.logger.warning(
+                "Claude run failed returncode=%d elapsed_ms=%.0f kind=%s signal=%s error=%s",
+                returncode, command.elapsed_ms, failure.kind, failure.signal, failure.message,
+            )
+            return provider_error_cls(
+                failure.message, command=command, returncode=returncode,
+                stdout=stdout, stderr=stderr, payload=payload, failure=failure,
+            )
         rate_limit_text = next(
             (text for text in (error_text, *trusted_texts) if is_rate_limit_text(text)),
             None,
