@@ -44,7 +44,7 @@ from .exceptions import (
     CodexTimeoutError,
 )
 from .rate_limits import is_rate_limit_text, parse_rate_limit_info
-from .provider_errors import classify_provider_failure
+from .provider_errors import _classify_codex_failure
 from .provider_retry import ProviderRetryPolicy
 from .schema import StructuredSchema
 from .transport import PreparedCommand, execute_command
@@ -698,13 +698,7 @@ class CodexClient:
                 stdout=stdout,
                 stderr=stderr,
             )
-        failure = classify_provider_failure(
-            CodexProcessError(
-                error_text, command=command, returncode=returncode,
-                stdout=stdout, stderr=stderr, payload=payload,
-            ),
-            codex_output_protocol=output_protocol,
-        )
+        failure = _classify_codex_failure(trusted_texts)
         if failure is not None:
             provider_error_cls = CodexCapacityError if failure.kind == "capacity" else CodexServerError
             self.logger.warning(

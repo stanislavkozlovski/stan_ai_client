@@ -31,7 +31,7 @@ from .exceptions import (
     ClaudeTimeoutError,
 )
 from .parser import summarize_error_text, try_parse_json_payload
-from .provider_errors import classify_provider_failure
+from .provider_errors import _classify_claude_failure
 from .provider_retry import ProviderRetryPolicy
 from .rate_limits import is_rate_limit_text, parse_rate_limit_info
 from .schema import StructuredSchema
@@ -509,10 +509,7 @@ class ClaudeCodeClient:
             stdout=stdout,
             stderr=stderr,
         )
-        failure = classify_provider_failure(ClaudeProcessError(
-            error_text, command=command, returncode=returncode,
-            stdout=stdout, stderr=stderr, payload=payload,
-        ))
+        failure = _classify_claude_failure(trusted_texts, payload=payload)
         if failure is not None:
             provider_error_cls = ClaudeCapacityError if failure.kind == "capacity" else ClaudeServerError
             self.logger.warning(

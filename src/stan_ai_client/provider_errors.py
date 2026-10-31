@@ -13,7 +13,7 @@ from ._network import (
     codex_trusted_error_texts,
 )
 from .exceptions import ClaudeProcessError, CodexProcessError, ProcessError, ProviderError
-from .types import ProviderFailure
+from .types import ClaudeJsonPayload, ProviderFailure
 
 SERVER_STATUSES = {500, 502, 503, 504}
 _CLAUDE_STATUS = re.compile(r"\bAPI Error:\s*(\d{3})\b", re.IGNORECASE)
@@ -46,6 +46,54 @@ def _retry_hint(texts: tuple[str, ...]) -> float | None:
     return None
 
 
+def _classify_claude_failure(
+    texts: tuple[str, ...], *, payload: ClaudeJsonPayload | None
+) -> ProviderFailure | None:
+    """Classify Claude's native status and already-trusted diagnostic texts."""
+    status = None
+    if payload is not None and payload.is_error is True:
+        raw_status = payload.extras.get("api_error_status")
+        if isinstance(raw_status, int) and not isinstance(raw_status, bool):
+            status = raw_status
+    if status is not None:
+        # Machine-readable status wins over text, including for non-retryable errors.
+        message = texts[0] if texts else f"Claude API Error: {status}"
+        if status == 529 or status in SERVER_STATUSES:
+            return ProviderFailure(
+                "capacity" if status == 529 else "server_error",
+                str(status),
+                message,
+                _retry_hint(texts),
+            )
+        return None
+    for text in texts:
+        match = _CLAUDE_STATUS.search(text)
+        status = int(match[1]) if match else None
+        if status == 529 or "repeated 529 overloaded errors" in text.casefold():
+            return ProviderFailure("capacity", "529", text, _retry_hint(texts))
+        if status in SERVER_STATUSES:
+            return ProviderFailure("server_error", str(status), text, _retry_hint(texts))
+    return None
+
+
+def _classify_codex_failure(texts: tuple[str, ...]) -> ProviderFailure | None:
+    """Classify Codex's already-trusted diagnostic texts."""
+    for text in texts:
+        if "selected model is at capacity" in text.casefold():
+            return ProviderFailure("capacity", "server_overloaded", text, _retry_hint(texts))
+        if "currently experiencing high demand" in text.casefold():
+            return ProviderFailure(
+                "server_error",
+                "internal_server_error",
+                text,
+                _retry_hint(texts),
+            )
+        match = _CODEX_STATUS.search(text)
+        if match and int(match[1]) in SERVER_STATUSES:
+            return ProviderFailure("server_error", match[1], text, _retry_hint(texts))
+    return None
+
+
 def classify_provider_failure(
     error: ProcessError,
     *,
@@ -60,51 +108,20 @@ def classify_provider_failure(
     if isinstance(error, ProviderError):
         return error.failure
     if isinstance(error, ClaudeProcessError):
-        texts = claude_trusted_error_texts(
+        return _classify_claude_failure(
+            claude_trusted_error_texts(
+                payload=error.payload,
+                stdout=error.stdout,
+                stderr=error.stderr,
+            ),
             payload=error.payload,
-            stdout=error.stdout,
-            stderr=error.stderr,
         )
-        status = None
-        if error.payload is not None and error.payload.is_error is True:
-            raw_status = error.payload.extras.get("api_error_status")
-            if isinstance(raw_status, int) and not isinstance(raw_status, bool):
-                status = raw_status
-        if status is not None:
-            # Machine-readable status wins over text, including for non-retryable errors.
-            message = texts[0] if texts else f"Claude API Error: {status}"
-            if status == 529 or status in SERVER_STATUSES:
-                return ProviderFailure(
-                    "capacity" if status == 529 else "server_error",
-                    str(status),
-                    message,
-                    _retry_hint(texts),
-                )
-            return None
-        for text in texts:
-            match = _CLAUDE_STATUS.search(text)
-            status = int(match[1]) if match else None
-            if status == 529 or "repeated 529 overloaded errors" in text.casefold():
-                return ProviderFailure("capacity", "529", text, _retry_hint(texts))
-            if status in SERVER_STATUSES:
-                return ProviderFailure("server_error", str(status), text, _retry_hint(texts))
-    elif isinstance(error, CodexProcessError):
-        texts = codex_trusted_error_texts(
-            payload=error.payload,
-            stderr=error.stderr,
-            output_protocol=codex_output_protocol,
+    if isinstance(error, CodexProcessError):
+        return _classify_codex_failure(
+            codex_trusted_error_texts(
+                payload=error.payload,
+                stderr=error.stderr,
+                output_protocol=codex_output_protocol,
+            )
         )
-        for text in texts:
-            if "selected model is at capacity" in text.casefold():
-                return ProviderFailure("capacity", "server_overloaded", text, _retry_hint(texts))
-            if "currently experiencing high demand" in text.casefold():
-                return ProviderFailure(
-                    "server_error",
-                    "internal_server_error",
-                    text,
-                    _retry_hint(texts),
-                )
-            match = _CODEX_STATUS.search(text)
-            if match and int(match[1]) in SERVER_STATUSES:
-                return ProviderFailure("server_error", match[1], text, _retry_hint(texts))
     return None
