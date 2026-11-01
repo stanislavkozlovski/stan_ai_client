@@ -22,6 +22,7 @@ from .exceptions import (
     ClaudeStructuredOutputMissingError,
     ClaudeStructuredOutputValidationError,
     ClaudeTimeoutError,
+    ClaudeUnclassifiedProviderError,
     CodexApprovalRequiredError,
     CodexCapacityError,
     CodexCodeError,
@@ -36,6 +37,7 @@ from .exceptions import (
     CodexStructuredOutputMissingError,
     CodexStructuredOutputValidationError,
     CodexTimeoutError,
+    CodexUnclassifiedProviderError,
     ExecutableNotFoundError,
     GrokApprovalRequiredError,
     GrokCodeError,
@@ -51,6 +53,7 @@ from .exceptions import (
     GrokStructuredOutputMissingError,
     GrokStructuredOutputValidationError,
     GrokTimeoutError,
+    GrokUnclassifiedProviderError,
     LimitError,
     NetworkUnavailableError,
     ProcessError,
@@ -64,6 +67,7 @@ from .exceptions import (
     StructuredSchemaValidationError,
     StructuredOutputMissingError,
     StructuredOutputValidationError,
+    UnclassifiedProviderError,
 )
 from .rate_limits import RateLimitInfo, parse_rate_limit_info
 from .provider_errors import classify_provider_failure
@@ -146,6 +150,7 @@ __all__ = [
     "ClaudeStructuredOutputMissingError",
     "ClaudeStructuredOutputValidationError",
     "ClaudeTimeoutError",
+    "ClaudeUnclassifiedProviderError",
     "CodexClient",
     "CodexApprovalRequiredError",
     "CodexCodeError",
@@ -165,6 +170,7 @@ __all__ = [
     "CodexStructuredOutputValidationError",
     "CodexStructuredRunResult",
     "CodexTimeoutError",
+    "CodexUnclassifiedProviderError",
     "CommandMetadata",
     "ExecutableNotFoundError",
     "GrokClient",
@@ -188,6 +194,7 @@ __all__ = [
     "GrokStructuredOutputValidationError",
     "GrokStructuredRunResult",
     "GrokTimeoutError",
+    "GrokUnclassifiedProviderError",
     "JsonRunResult",
     "LimitError",
     "NetworkUnavailableError",
@@ -205,6 +212,7 @@ __all__ = [
     "StructuredOutputMissingError",
     "StructuredOutputValidationError",
     "TextRunResult",
+    "UnclassifiedProviderError",
     "parse_rate_limit_info",
     "validate_codex_output_schema",
 ]

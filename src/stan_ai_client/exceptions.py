@@ -77,6 +77,14 @@ class NetworkUnavailableError(ProcessError):
     """Strong evidence that a provider transport was unavailable."""
 
 
+class UnclassifiedProviderError(ProcessError):
+    """A failed provider CLI invocation with no more specific error type.
+
+    The cause may be local to the CLI or remote. Original process evidence is
+    retained; this error does not authorize automatic retries.
+    """
+
+
 class ProviderError(ProcessError):
     """A classified provider failure, retaining the original process evidence."""
 
@@ -229,6 +237,10 @@ class ClaudeProcessError(ProcessError, ClaudeCodeError):
     payload: ClaudeJsonPayload | None
 
 
+class ClaudeUnclassifiedProviderError(UnclassifiedProviderError, ClaudeProcessError):
+    pass
+
+
 class ClaudeCapacityError(CapacityError, ClaudeProcessError):
     pass
 
@@ -337,6 +349,10 @@ class CodexProcessError(ProcessError, CodexCodeError):
     payload: CodexJsonPayload | None
 
 
+class CodexUnclassifiedProviderError(UnclassifiedProviderError, CodexProcessError):
+    pass
+
+
 class CodexCapacityError(CapacityError, CodexProcessError):
     pass
 
@@ -412,6 +428,10 @@ class GrokTimeoutError(AIClientTimeoutError, GrokCodeError):
 
 class GrokProcessError(ProcessError, GrokCodeError):
     payload: GrokJsonPayload | None
+
+
+class GrokUnclassifiedProviderError(UnclassifiedProviderError, GrokProcessError):
+    pass
 
 
 class GrokNetworkUnavailableError(NetworkUnavailableError, GrokProcessError):

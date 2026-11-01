@@ -26,6 +26,7 @@ from stan_ai_client import (
     CodexStructuredOutputMissingError,
     CodexStructuredOutputValidationError,
     CodexTimeoutError,
+    CodexUnclassifiedProviderError,
     ExecutableNotFoundError,
     NetworkUnavailableError,
     RateLimitRetryPolicy,
@@ -548,7 +549,7 @@ def test_codex_text_mode_ignores_network_prose_in_progress_stderr(
     with pytest.raises(CodexProcessError) as excinfo:
         CodexClient().run_text("quote the documentation")
 
-    assert type(excinfo.value) is CodexProcessError
+    assert type(excinfo.value) is CodexUnclassifiedProviderError
     assert not isinstance(excinfo.value, NetworkUnavailableError)
     assert excinfo.value.stderr == stderr
 
@@ -582,7 +583,7 @@ def test_codex_text_mode_does_not_retry_rate_limit_prose(
             rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=120),
         )
 
-    assert type(excinfo.value) is CodexProcessError
+    assert type(excinfo.value) is CodexUnclassifiedProviderError
     assert not isinstance(excinfo.value, CodexRateLimitError)
     assert excinfo.value.stderr == stderr
     assert len(recorder.calls) == 1
@@ -852,7 +853,7 @@ def test_codex_ignores_agent_message_network_prose_and_disconnect_alone(
     with pytest.raises(CodexProcessError) as excinfo:
         CodexClient().run_json("quote the diff")
 
-    assert type(excinfo.value) is CodexProcessError
+    assert type(excinfo.value) is CodexUnclassifiedProviderError
     assert not isinstance(excinfo.value, NetworkUnavailableError)
 
 
@@ -1014,7 +1015,7 @@ def test_codex_structured_mode_ignores_network_prose_in_progress_stderr(
     with pytest.raises(CodexProcessError) as excinfo:
         CodexClient().run_structured("quote the documentation", schema=schema)
 
-    assert type(excinfo.value) is CodexProcessError
+    assert type(excinfo.value) is CodexUnclassifiedProviderError
     assert not isinstance(excinfo.value, NetworkUnavailableError)
     assert excinfo.value.stderr == stderr
 
@@ -1535,7 +1536,7 @@ def test_codex_structured_mode_surfaces_provider_error_from_stderr_tail(
         CodexClient().run_structured(prompt, schema=schema)
 
     message = str(excinfo.value)
-    assert type(excinfo.value) is CodexProcessError
+    assert type(excinfo.value) is CodexUnclassifiedProviderError
     assert message == provider_error[-500:]
     assert "invalid_json_schema" in message
     assert "uniqueItems" in message

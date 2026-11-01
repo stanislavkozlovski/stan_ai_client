@@ -31,6 +31,7 @@ from .exceptions import (
     GrokStructuredOutputMissingError,
     GrokStructuredOutputValidationError,
     GrokTimeoutError,
+    GrokUnclassifiedProviderError,
 )
 from .grok_parser import (
     GrokStructuredOutcome,
@@ -42,6 +43,7 @@ from .grok_parser import (
     try_parse_grok_json_payload,
 )
 from .rate_limits import is_grok_rate_limit_text, parse_rate_limit_info
+from .provider_errors import _log_unclassified_provider_error
 from .schema import StructuredSchema
 from .transport import PreparedCommand, execute_command
 from .types import (
@@ -925,12 +927,10 @@ class GrokClient:
                 error_text,
             )
         else:
-            error_cls = GrokProcessError
-            self.logger.warning(
-                "Grok run failed returncode=%d elapsed_ms=%.0f error=%s",
-                returncode,
-                command.elapsed_ms,
-                error_text,
+            error_cls = GrokUnclassifiedProviderError
+            _log_unclassified_provider_error(
+                self.logger, provider="grok", command=command,
+                returncode=returncode, message=error_text,
             )
         return error_cls(
             error_text,
