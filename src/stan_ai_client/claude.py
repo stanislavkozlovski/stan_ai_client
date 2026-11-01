@@ -29,9 +29,10 @@ from .exceptions import (
     ClaudeStructuredOutputMissingError,
     ClaudeStructuredOutputValidationError,
     ClaudeTimeoutError,
+    ClaudeUnclassifiedProviderError,
 )
 from .parser import summarize_error_text, try_parse_json_payload
-from .provider_errors import _classify_claude_failure
+from .provider_errors import _classify_claude_failure, _log_unclassified_provider_error
 from .provider_retry import ProviderRetryPolicy
 from .rate_limits import is_rate_limit_text, parse_rate_limit_info
 from .schema import StructuredSchema
@@ -558,13 +559,19 @@ class ClaudeCodeClient:
                 "No conversation found with session ID" in text
                 for text in (stderr, stdout, payload.result if payload and payload.result else "")
             )
-            error_cls = ClaudeSessionNotFoundError if missing_session else ClaudeProcessError
-            self.logger.warning(
-                "Claude run failed returncode=%d elapsed_ms=%.0f error=%s",
-                returncode,
-                command.elapsed_ms,
-                error_text,
-            )
+            error_cls = ClaudeSessionNotFoundError if missing_session else ClaudeUnclassifiedProviderError
+            if error_cls is ClaudeUnclassifiedProviderError:
+                _log_unclassified_provider_error(
+                    self.logger, provider="claude", command=command,
+                    returncode=returncode, message=error_text,
+                )
+            else:
+                self.logger.warning(
+                    "Claude run failed returncode=%d elapsed_ms=%.0f error=%s",
+                    returncode,
+                    command.elapsed_ms,
+                    error_text,
+                )
         return error_cls(
             error_text,
             command=command,

@@ -19,6 +19,8 @@ from .exceptions import (
     ClaudeStructuredOutputMissingError,
     ClaudeStructuredOutputValidationError,
     ClaudeTimeoutError,
+    ClaudeUnclassifiedProviderError,
+    UnclassifiedProviderError,
 )
 from .parser import summarize_error_text, try_parse_json_payload
 from .rate_limits import is_rate_limit_text, parse_rate_limit_info
@@ -51,6 +53,7 @@ __all__ = [
     "ClaudeStructuredOutputMissingError",
     "ClaudeStructuredOutputValidationError",
     "ClaudeTimeoutError",
+    "ClaudeUnclassifiedProviderError",
     "CommandMetadata",
     "DEFAULT_LOGGER",
     "Effort",
@@ -64,6 +67,7 @@ __all__ = [
     "StructuredRunResult",
     "StructuredSchema",
     "TextRunResult",
+    "UnclassifiedProviderError",
     "execute_command",
     "is_rate_limit_text",
     "parse_rate_limit_info",

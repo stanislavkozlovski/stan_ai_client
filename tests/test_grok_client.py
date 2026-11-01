@@ -21,6 +21,7 @@ from stan_ai_client import (
 from stan_ai_client.exceptions import (
     GrokExecutableNotFoundError,
     GrokProcessError,
+    GrokUnclassifiedProviderError,
     GrokProtocolError,
     GrokRateLimitError,
     GrokStructuredOutputMissingError,
@@ -469,7 +470,7 @@ def test_grok_ignores_network_prose_in_stdout_and_disconnect_alone(
     with pytest.raises(GrokProcessError) as excinfo:
         GrokClient().run_text("quote the diff")
 
-    assert type(excinfo.value) is GrokProcessError
+    assert type(excinfo.value) is GrokUnclassifiedProviderError
     assert not isinstance(excinfo.value, NetworkUnavailableError)
 
 

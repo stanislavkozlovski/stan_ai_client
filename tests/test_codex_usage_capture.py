@@ -18,6 +18,7 @@ from stan_ai_client import (
     CodexStructuredOutputMissingError,
     CodexStructuredOutputValidationError,
     CodexTimeoutError,
+    CodexUnclassifiedProviderError,
     RateLimitRetryPolicy,
     StructuredSchema,
     normalize_ai_usage,
@@ -269,7 +270,7 @@ def test_jsonl_tool_output_does_not_authorize_rate_limit_retry(
             rate_limit_policy=RateLimitRetryPolicy(max_wait_seconds=62),
         )
 
-    assert type(caught.value) is CodexProcessError
+    assert type(caught.value) is CodexUnclassifiedProviderError
     assert len(runner.argv) == 1
     assert sleeps == []
     runner.assert_clean()
