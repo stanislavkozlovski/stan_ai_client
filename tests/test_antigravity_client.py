@@ -486,6 +486,22 @@ def test_run_json_exposes_result_envelope_events_and_invocation_usage(mock_exec:
 
 
 @patch("stan_ai_client.antigravity.execute_command")
+def test_run_json_preserves_literal_unicode_line_separators(mock_exec: Mock) -> None:
+    response = "before\u0085next\u2028line\u2029after"
+    # Keep separators literal on the wire rather than JSON-escaping them.
+    result_record = json.dumps(result_event(response=response), ensure_ascii=False)
+    stdout = stream(init_event()) + result_record + "\n"
+    mock_exec.return_value = completed(stdout)
+
+    result = AntigravityClient().run_json("hi")
+
+    assert result.stdout == stdout
+    assert result.payload.response == response
+    assert len(result.payload.events) == 2
+    assert result.payload.stream_diagnostics == ()
+
+
+@patch("stan_ai_client.antigravity.execute_command")
 def test_resumed_run_marks_cumulative_usage_and_sums_this_invocations_steps(
     mock_exec: Mock,
 ) -> None:

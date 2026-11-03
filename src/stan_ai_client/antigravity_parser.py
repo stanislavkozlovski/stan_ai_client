@@ -53,7 +53,7 @@ def decode_antigravity_stream(stdout: str) -> AntigravityStream:
     events: list[dict[str, Any]] = []
     result: dict[str, Any] | None = None
     invalid_lines = 0
-    for line in stdout.splitlines():
+    for line in stdout.split("\n"):
         if not line.strip():
             continue
         try:
