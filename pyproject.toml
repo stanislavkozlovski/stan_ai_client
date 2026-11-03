@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "stan-ai-client"
 version = "0.1.22"
-description = "Thin Python client for running Claude Code and Codex via local executables."
+description = "Thin Python client for running Claude Code, Codex, Grok, and Antigravity via local executables."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

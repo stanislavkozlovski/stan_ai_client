@@ -3,8 +3,15 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Literal
 
+from .antigravity_parser import antigravity_error_lines
 from .codex_parser import CODEX_ERROR_EVENT_TYPES
-from .types import ClaudeJsonPayload, CodexJsonPayload, GrokJsonPayload
+from .types import (
+    AntigravityAgentError,
+    AntigravityJsonPayload,
+    ClaudeJsonPayload,
+    CodexJsonPayload,
+    GrokJsonPayload,
+)
 
 _NETWORK_UNAVAILABLE_MARKERS = (
     "failed to lookup address information",
@@ -36,6 +43,13 @@ _CLAUDE_NETWORK_UNAVAILABLE_MARKERS = _NETWORK_UNAVAILABLE_MARKERS + (
     "unable to connect to api",
     "connection closed mid-response",
 )
+# agy is a Go binary: its resolver reports NXDOMAIN and SERVFAIL as
+# "no such host" and "server misbehaving", and ENETDOWN as "network is down".
+_ANTIGRAVITY_NETWORK_UNAVAILABLE_MARKERS = _NETWORK_UNAVAILABLE_MARKERS + (
+    "no such host",
+    "server misbehaving",
+    "network is down",
+)
 _TRUSTED_ERROR_KEYS = ("message", "error", "cause")
 
 CodexOutputProtocol = Literal["unstructured", "jsonl"]
@@ -49,6 +63,32 @@ def has_network_unavailable_evidence(texts: Sequence[str]) -> bool:
 
 def has_claude_network_unavailable_evidence(texts: Sequence[str]) -> bool:
     return _matches_any_marker(texts, _CLAUDE_NETWORK_UNAVAILABLE_MARKERS)
+
+
+def has_antigravity_network_unavailable_evidence(texts: Sequence[str]) -> bool:
+    return _matches_any_marker(texts, _ANTIGRAVITY_NETWORK_UNAVAILABLE_MARKERS)
+
+
+def antigravity_trusted_error_texts(
+    *,
+    payload: AntigravityJsonPayload | None,
+    stderr: str,
+    agent_error: AntigravityAgentError | None,
+) -> tuple[str, ...]:
+    """agy's declared failure texts: the result ``error``, the ``AGY_ERROR``
+    short error, and ``error:`` stderr lines.
+
+    The rest of stderr is not trusted: warnings and the raw ``AGY_ERROR`` JSON
+    carry conversation and error IDs whose hex digits can spell markers such
+    as ``429``. Model output and tool results are never inspected.
+    """
+    texts: list[str] = []
+    if payload is not None and payload.error:
+        texts.append(payload.error)
+    if agent_error is not None and agent_error.short_error:
+        texts.append(agent_error.short_error)
+    texts.extend(antigravity_error_lines(stderr))
+    return tuple(dict.fromkeys(texts))
 
 
 def claude_trusted_error_texts(

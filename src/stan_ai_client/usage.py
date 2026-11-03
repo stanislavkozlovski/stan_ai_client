@@ -13,7 +13,12 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Literal
 
-from .types import ClaudeJsonPayload, CodexJsonPayload, GrokJsonPayload
+from .types import (
+    AntigravityJsonPayload,
+    ClaudeJsonPayload,
+    CodexJsonPayload,
+    GrokJsonPayload,
+)
 
 _MAX_COUNT = 2**63 - 1
 _CODEX_TOKEN_COUNTERS = (
@@ -24,8 +29,26 @@ _CODEX_TOKEN_COUNTERS = (
     "reasoning_output_tokens",
     "total_tokens",
 )
+# agy: input excludes cache reads, output includes thinking, total_tokens is
+# input + output only, and cache writes are not reported. Result counters are
+# cumulative across a resumed conversation.
+_ANTIGRAVITY_TOKEN_COUNTERS = (
+    "input_tokens",
+    "cache_read_tokens",
+    "output_tokens",
+    "thinking_tokens",
+    "total_tokens",
+)
+_CUMULATIVE_COUNTERS = {
+    "codex": _CODEX_TOKEN_COUNTERS,
+    "antigravity": _ANTIGRAVITY_TOKEN_COUNTERS,
+}
 UsagePayload = (
-    Mapping[str, Any] | ClaudeJsonPayload | CodexJsonPayload | GrokJsonPayload
+    Mapping[str, Any]
+    | ClaudeJsonPayload
+    | CodexJsonPayload
+    | GrokJsonPayload
+    | AntigravityJsonPayload
 )
 
 
@@ -68,20 +91,34 @@ def normalize_ai_usage(
 ) -> UsageFacts:
     """Normalize one invocation, without summing repeated terminal events.
 
-    Codex capture marks fresh calls as invocation scope and resumes as cumulative.
-    Bare Codex counters need an explicit scope; Claude defaults to invocation.
-    For a confirmed cumulative Codex source, ``previous_snapshot`` must be the
-    immediately preceding snapshot from the same session. Missing or ambiguous
-    baselines, changed counter shapes, and resets leave the delta unavailable.
-    ``requested_model`` is an optional caller hint for single-model fallbacks.
+    Codex capture and Antigravity mark fresh calls as invocation scope and
+    resumes as cumulative. Bare Codex and Antigravity counters need an explicit
+    scope; Claude defaults to invocation. An Antigravity payload's ``step_usage``
+    (this invocation's completed steps) is used for any non-invocation scope.
+    Otherwise, for a confirmed cumulative source, ``previous_snapshot`` must be
+    the immediately preceding snapshot from the same session. Missing or
+    ambiguous baselines, changed counter shapes, and resets leave the delta
+    unavailable. ``requested_model`` is an optional hint for single-model fallbacks.
     """
     raw = _raw_payload(payload)
-    if provider != "codex":
+    counters = _CUMULATIVE_COUNTERS.get(provider)
+    if counters is None:
         return _normalize(provider, raw)
 
     scope = raw.get("usage_scope", "unknown")
     if scope == "invocation":
         return _normalize(provider, raw)
+    step_usage = raw.get("step_usage") if provider == "antigravity" else None
+    if isinstance(step_usage, Mapping):
+        facts = _normalize(provider, {**raw, "usage": dict(step_usage)})
+        return replace(
+            facts,
+            raw=raw,
+            diagnostics=(
+                *facts.diagnostics,
+                "invocation usage summed from this invocation's step events",
+            ),
+        )
     if scope != "cumulative":
         return _unavailable(_normalize(provider, raw), "unknown usage scope")
 
@@ -97,8 +134,8 @@ def normalize_ai_usage(
         )
 
     try:
-        invocation_usage = _codex_usage_delta(
-            _mapping(raw.get("usage")), _mapping(previous.get("usage"))
+        invocation_usage = _usage_delta(
+            _mapping(raw.get("usage")), _mapping(previous.get("usage")), counters
         )
     except ValueError:
         return _unavailable(
@@ -124,18 +161,21 @@ def _raw_payload(payload: UsagePayload) -> dict[str, Any]:
 
 
 def _normalize(provider: str, raw: dict[str, Any]) -> UsageFacts:
-    raw_diagnostics = raw.get("usage_diagnostics")
-    diagnostics = (
-        [item for item in raw_diagnostics if isinstance(item, str)]
-        if isinstance(raw_diagnostics, (tuple, list))
-        else []
-    )
+    diagnostics = [
+        item
+        for key in ("usage_diagnostics", "stream_diagnostics")
+        if isinstance(raw.get(key), (tuple, list))
+        for item in raw[key]
+        if isinstance(item, str)
+    ]
     session = _session_id(raw)
     usage = _mapping(raw.get("usage"))
     model = _text(raw.get("model"))
     rows: list[ModelUsage] = []
     if provider == "codex":
         tokens = _codex_tokens(usage, diagnostics)
+    elif provider == "antigravity":
+        tokens = _antigravity_tokens(usage, diagnostics)
     elif provider == "claude":
         model_usage = _mapping(raw.get("modelUsage"))
         rows = [
@@ -203,11 +243,25 @@ def _codex_tokens(usage: Mapping[str, Any], diagnostics: list[str]) -> TokenUsag
     return _allocate(fresh, cached, written, output, reasoning, total, diagnostics)
 
 
-def _codex_usage_delta(
-    current: Mapping[str, Any], previous: Mapping[str, Any]
+def _antigravity_tokens(usage: Mapping[str, Any], diagnostics: list[str]) -> TokenUsage:
+    """agy's ``input_tokens`` are the uncached prompt and ``cache_read_tokens``
+    the cached prompt, so they are disjoint; agy's own ``total_tokens`` omits
+    cache reads and is therefore not the invocation total."""
+
+    def count(name: str) -> int | None:
+        return _count(usage.get(name), diagnostics, name)
+
+    fresh, cached = count("input_tokens"), count("cache_read_tokens")
+    output, reasoning = count("output_tokens"), count("thinking_tokens")
+    total = _sum_complete([fresh, cached, output], diagnostics)
+    return _allocate(fresh, cached, None, output, reasoning, total, diagnostics)
+
+
+def _usage_delta(
+    current: Mapping[str, Any], previous: Mapping[str, Any], counters: tuple[str, ...]
 ) -> dict[str, int]:
     delta: dict[str, int] = {}
-    for name in _CODEX_TOKEN_COUNTERS:
+    for name in counters:
         if (name in current) != (name in previous):
             raise ValueError("counter shape changed")
         if name not in current:
@@ -381,6 +435,7 @@ def _session_id(raw: Mapping[str, Any]) -> str | None:
         _text(raw.get("session_id"))
         or _text(raw.get("sessionId"))
         or _text(raw.get("thread_id"))
+        or _text(raw.get("conversation_id"))
     )
 
 
