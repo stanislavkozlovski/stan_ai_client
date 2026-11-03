@@ -173,6 +173,16 @@ def test_agent_error_record_parses_the_last_valid_line() -> None:
     assert parse_antigravity_agent_error("error: plain\n") is None
 
 
+def test_only_lf_ends_a_stderr_line() -> None:
+    # agy's JSON can carry U+0085 unescaped, and a warning can quote other text.
+    record = LIVE_AGENT_ERROR.replace("plan model", "plan\u0085model")
+    stderr = f'warning: conversation "x\u2028error: rate limit" not found\n{record}\n'
+    agent_error = parse_antigravity_agent_error(stderr)
+    assert agent_error is not None and agent_error.short_error is not None
+    assert "plan\u0085model" in agent_error.short_error
+    assert antigravity_error_lines(stderr) == ()
+
+
 def test_error_lines_and_notices() -> None:
     stderr = "\n".join(
         [

@@ -538,9 +538,7 @@ class AntigravityClient:
             raise self._build_print_timeout_error(
                 completed, metadata, payload=payload, effective=effective
             )
-        if payload.status != _SUCCESS_STATUS or payload.finished_reason is not None:
-            # agy omits finished_reason when a turn completes normally; any value
-            # (interrupted, error, or a future reason) means the turn ended early.
+        if not _turn_completed(payload):
             raise self._build_process_error(
                 completed, metadata, payload=payload, effective=effective
             )
@@ -889,20 +887,14 @@ class AntigravityClient:
     def _build_stream_protocol_error(
         self, command: CommandMetadata, *, stdout: str, stderr: str
     ) -> AntigravityProtocolError:
-        if not stdout.strip():
-            return AntigravityProtocolError(
-                "Antigravity returned empty output in stream-json mode",
-                command=command,
-                stdout=stdout,
-                stderr=stderr,
-            )
-        error = AntigravityProtocolError(
+        message = (
             "Antigravity stream-json output ended without a result event "
-            f"({len(stdout)} stdout characters captured on the exception)",
-            command=command,
-            stdout=stdout,
-            stderr=stderr,
+            f"({len(stdout)} stdout characters captured on the exception)"
+            if stdout.strip()
+            else "Antigravity returned empty output in stream-json mode"
         )
+        error = AntigravityProtocolError(message, command=command, stdout=stdout, stderr=stderr)
+        # None when stdout holds no stream-json events, such as empty output.
         error.payload = recover_antigravity_partial_payload(stdout)
         return error
 
@@ -944,9 +936,13 @@ def _usage_scope(
     """
     if effective.resumes_conversation:
         return "cumulative"
-    if payload.status == _SUCCESS_STATUS and payload.finished_reason is None:
-        return "invocation"
-    return "unknown"
+    return "invocation" if _turn_completed(payload) else "unknown"
+
+
+def _turn_completed(payload: AntigravityJsonPayload) -> bool:
+    """agy omits ``finished_reason`` when a turn completes normally; any value
+    (print_timeout, interrupted, error, or a future reason) means it ended early."""
+    return payload.status == _SUCCESS_STATUS and payload.finished_reason is None
 
 
 def _denied_action_names(payload: AntigravityJsonPayload) -> list[str]:

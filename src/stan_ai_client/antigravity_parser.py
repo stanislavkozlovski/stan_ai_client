@@ -53,7 +53,7 @@ def decode_antigravity_stream(stdout: str) -> AntigravityStream:
     events: list[dict[str, Any]] = []
     result: dict[str, Any] | None = None
     invalid_lines = 0
-    for line in stdout.split("\n"):
+    for line in _lines(stdout):
         if not line.strip():
             continue
         try:
@@ -198,7 +198,7 @@ def has_current_structured_output(payload: AntigravityJsonPayload) -> bool:
 def parse_antigravity_agent_error(stderr: str) -> AntigravityAgentError | None:
     """Return the last structured ``AGY_ERROR`` record on stderr, if any."""
     record: AntigravityAgentError | None = None
-    for line in stderr.splitlines():
+    for line in _lines(stderr):
         candidate = line.strip()
         if not candidate.startswith(AGENT_ERROR_PREFIX):
             continue
@@ -215,20 +215,20 @@ def antigravity_error_lines(stderr: str) -> tuple[str, ...]:
     """agy's fatal diagnostics: the stderr lines that start with ``error:``."""
     return tuple(
         candidate
-        for candidate in (line.strip() for line in stderr.splitlines())
+        for candidate in (line.strip() for line in _lines(stderr))
         if candidate.casefold().startswith("error:")
     )
 
 
 def has_print_timeout_notice(stderr: str) -> bool:
     return any(
-        line.strip().startswith(PRINT_TIMEOUT_NOTICE_PREFIX) for line in stderr.splitlines()
+        line.strip().startswith(PRINT_TIMEOUT_NOTICE_PREFIX) for line in _lines(stderr)
     )
 
 
 def has_missing_conversation_warning(stderr: str) -> bool:
     """agy found no conversation for ``--conversation`` and started a new one."""
-    return any(_MISSING_CONVERSATION.match(line.strip()) for line in stderr.splitlines())
+    return any(_MISSING_CONVERSATION.match(line.strip()) for line in _lines(stderr))
 
 
 def has_auto_mode_unavailable_warning(stderr: str) -> bool:
@@ -237,7 +237,7 @@ def has_auto_mode_unavailable_warning(stderr: str) -> bool:
 
 def headless_denial_notice(stderr: str) -> str | None:
     """agy's own explanation when a headless run auto-denied a tool and produced nothing."""
-    for line in stderr.splitlines():
+    for line in _lines(stderr):
         if HEADLESS_DENIAL_MARKER in line:
             return line
     return None
@@ -264,6 +264,17 @@ def summarize_antigravity_error_text(
     if payload is not None and payload.status:
         return f"Antigravity reported status {payload.status}"
     return f"Antigravity exited with code {returncode}"
+
+
+def _lines(text: str) -> list[str]:
+    """Split agy output on LF, the only line terminator agy writes.
+
+    ``str.splitlines`` also splits on Unicode line boundaries such as U+0085,
+    U+2028, and U+2029, which agy's JSON can carry unescaped and its warnings
+    can quote. That would cut one ``stream-json`` event or ``AGY_ERROR`` record
+    in two, or start a forged ``error:`` line in the middle of a warning.
+    """
+    return text.split("\n")
 
 
 def _steps(events: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
