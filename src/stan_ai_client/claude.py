@@ -554,24 +554,23 @@ class ClaudeCodeClient:
                 command.elapsed_ms,
                 error_text,
             )
-        else:
-            missing_session = "--resume" in command.argv and any(
-                "No conversation found with session ID" in text
-                for text in (stderr, stdout, payload.result if payload and payload.result else "")
+        elif "--resume" in command.argv and any(
+            "No conversation found with session ID" in text
+            for text in (stderr, stdout, payload.result if payload and payload.result else "")
+        ):
+            error_cls = ClaudeSessionNotFoundError
+            self.logger.warning(
+                "Claude run failed returncode=%d elapsed_ms=%.0f error=%s",
+                returncode,
+                command.elapsed_ms,
+                error_text,
             )
-            error_cls = ClaudeSessionNotFoundError if missing_session else ClaudeUnclassifiedProviderError
-            if error_cls is ClaudeUnclassifiedProviderError:
-                _log_unclassified_provider_error(
-                    self.logger, provider="claude", command=command,
-                    returncode=returncode, message=error_text,
-                )
-            else:
-                self.logger.warning(
-                    "Claude run failed returncode=%d elapsed_ms=%.0f error=%s",
-                    returncode,
-                    command.elapsed_ms,
-                    error_text,
-                )
+        else:
+            error_cls = ClaudeUnclassifiedProviderError
+            _log_unclassified_provider_error(
+                self.logger, provider="claude", command=command,
+                returncode=returncode, message=error_text,
+            )
         return error_cls(
             error_text,
             command=command,
