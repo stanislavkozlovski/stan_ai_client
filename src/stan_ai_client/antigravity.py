@@ -184,10 +184,9 @@ class AntigravityClient:
             text=text,
         )
         self._log_finish(
+            completed,
+            metadata,
             output_format="text",
-            metadata=metadata,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
             payload=payload,
         )
         return result
@@ -224,10 +223,9 @@ class AntigravityClient:
             payload=payload,
         )
         self._log_finish(
+            completed,
+            metadata,
             output_format="stream-json",
-            metadata=metadata,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
             payload=payload,
         )
         return result
@@ -314,10 +312,9 @@ class AntigravityClient:
             structured_output=structured_output,
         )
         self._log_finish(
+            completed,
+            metadata,
             output_format="stream-json",
-            metadata=metadata,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
             payload=payload,
         )
         return result
@@ -531,12 +528,7 @@ class AntigravityClient:
         )
         if completed.returncode != 0:
             raise self._build_process_error(
-                metadata,
-                returncode=completed.returncode,
-                stdout=stdout,
-                stderr=stderr,
-                payload=payload,
-                effective=effective,
+                completed, metadata, payload=payload, effective=effective
             )
         if payload is None:
             error = self._build_stream_protocol_error(metadata, stdout=stdout, stderr=stderr)
@@ -544,18 +536,13 @@ class AntigravityClient:
             raise error
         if payload.finished_reason == _PRINT_TIMEOUT_REASON:
             raise self._build_print_timeout_error(
-                metadata, stdout=stdout, stderr=stderr, payload=payload, effective=effective
+                completed, metadata, payload=payload, effective=effective
             )
         if payload.status != _SUCCESS_STATUS or payload.finished_reason is not None:
             # agy omits finished_reason when a turn completes normally; any value
             # (interrupted, error, or a future reason) means the turn ended early.
             raise self._build_process_error(
-                metadata,
-                returncode=completed.returncode,
-                stdout=stdout,
-                stderr=stderr,
-                payload=payload,
-                effective=effective,
+                completed, metadata, payload=payload, effective=effective
             )
         return completed, metadata, payload
 
@@ -570,23 +557,14 @@ class AntigravityClient:
         self._warn_if_auto_mode_unavailable(completed.stderr, effective=effective)
         if completed.returncode != 0:
             raise self._build_process_error(
-                metadata,
-                returncode=completed.returncode,
-                stdout=completed.stdout,
-                stderr=completed.stderr,
-                payload=None,
-                effective=effective,
+                completed, metadata, payload=None, effective=effective
             )
         self._raise_if_conversation_missing(
             completed, metadata, payload=None, effective=effective
         )
         if has_print_timeout_notice(completed.stderr):
             raise self._build_print_timeout_error(
-                metadata,
-                stdout=completed.stdout,
-                stderr=completed.stderr,
-                payload=None,
-                effective=effective,
+                completed, metadata, payload=None, effective=effective
             )
 
     def _raise_if_conversation_missing(
@@ -667,10 +645,9 @@ class AntigravityClient:
 
     def _build_print_timeout_error(
         self,
+        completed: CompletedProcess[str],
         command: CommandMetadata,
         *,
-        stdout: str,
-        stderr: str,
         payload: AntigravityJsonPayload | None,
         effective: ResolvedAntigravityRunOptions,
     ) -> AntigravityTimeoutError:
@@ -687,8 +664,8 @@ class AntigravityClient:
         return AntigravityTimeoutError(
             command,
             timeout_seconds,
-            stdout=stdout,
-            stderr=stderr,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
             payload=payload,
             message=(
                 "Antigravity turn stopped at its print timeout before completing; "
@@ -698,20 +675,21 @@ class AntigravityClient:
 
     def _build_process_error(
         self,
+        completed: CompletedProcess[str],
         command: CommandMetadata,
         *,
-        returncode: int,
-        stdout: str,
-        stderr: str,
         payload: AntigravityJsonPayload | None,
         effective: ResolvedAntigravityRunOptions,
     ) -> AntigravityProcessError:
-        agent_error = parse_antigravity_agent_error(stderr)
+        agent_error = parse_antigravity_agent_error(completed.stderr)
         trusted_texts = antigravity_trusted_error_texts(
-            payload=payload, stderr=stderr, agent_error=agent_error
+            payload=payload, stderr=completed.stderr, agent_error=agent_error
         )
         error_text = summarize_antigravity_error_text(
-            payload=payload, agent_error=agent_error, stderr=stderr, returncode=returncode
+            payload=payload,
+            agent_error=agent_error,
+            stderr=completed.stderr,
+            returncode=completed.returncode,
         )
 
         failure = _classify_antigravity_failure(trusted_texts, agent_error=agent_error)
@@ -723,7 +701,7 @@ class AntigravityClient:
             )
             self.logger.warning(
                 "Antigravity run failed returncode=%d elapsed_ms=%.0f kind=%s signal=%s error=%s",
-                returncode,
+                completed.returncode,
                 command.elapsed_ms,
                 failure.kind,
                 failure.signal,
@@ -732,9 +710,9 @@ class AntigravityClient:
             return provider_error_cls(
                 failure.message,
                 command=command,
-                returncode=returncode,
-                stdout=stdout,
-                stderr=stderr,
+                returncode=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
                 payload=payload,
                 failure=failure,
             )
@@ -745,7 +723,7 @@ class AntigravityClient:
             self.logger.warning(
                 "Antigravity run failed returncode=%d elapsed_ms=%.0f error=%s "
                 "retry_after_seconds=%s reset_at=%s",
-                returncode,
+                completed.returncode,
                 command.elapsed_ms,
                 rate_limit_text,
                 rate_limit.retry_after_seconds,
@@ -754,9 +732,9 @@ class AntigravityClient:
             return AntigravityRateLimitError(
                 rate_limit_text,
                 command=command,
-                returncode=returncode,
-                stdout=stdout,
-                stderr=stderr,
+                returncode=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
                 payload=payload,
                 rate_limit=rate_limit,
             )
@@ -767,14 +745,14 @@ class AntigravityClient:
             self.logger.warning(
                 "Antigravity run failed returncode=%d elapsed_ms=%.0f "
                 "network_unavailable=true error=%s",
-                returncode,
+                completed.returncode,
                 command.elapsed_ms,
                 error_text,
             )
         else:
             missing_conversation = (
                 effective.session_id is not None
-                and has_missing_conversation_warning(stderr)
+                and has_missing_conversation_warning(completed.stderr)
             )
             error_cls = (
                 AntigravitySessionNotFoundError
@@ -783,16 +761,16 @@ class AntigravityClient:
             )
             self.logger.warning(
                 "Antigravity run failed returncode=%d elapsed_ms=%.0f error=%s",
-                returncode,
+                completed.returncode,
                 command.elapsed_ms,
                 error_text,
             )
         return error_cls(
             error_text,
             command=command,
-            returncode=returncode,
-            stdout=stdout,
-            stderr=stderr,
+            returncode=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
             payload=payload,
         )
 
@@ -874,11 +852,10 @@ class AntigravityClient:
 
     def _log_finish(
         self,
+        completed: CompletedProcess[str],
+        metadata: CommandMetadata,
         *,
         output_format: str,
-        metadata: CommandMetadata,
-        stdout: str,
-        stderr: str,
         payload: AntigravityJsonPayload | None,
     ) -> None:
         self.logger.info(
@@ -886,8 +863,8 @@ class AntigravityClient:
             "stdout_chars=%d stderr_chars=%d",
             output_format,
             metadata.elapsed_ms,
-            len(stdout),
-            len(stderr),
+            len(completed.stdout),
+            len(completed.stderr),
         )
         if payload is not None:
             self.logger.debug(
