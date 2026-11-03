@@ -26,6 +26,7 @@ from stan_ai_client import (
     ClaudeStructuredOutputMissingError,
     ClaudeStructuredOutputValidationError,
     ClaudeTimeoutError,
+    ClaudeUnclassifiedProviderError,
     NetworkUnavailableError,
     RateLimitInfo,
     RateLimitRetryPolicy,
@@ -482,7 +483,7 @@ def test_claude_ignores_network_prose_in_stdout_and_disconnect_alone(
     with pytest.raises(ClaudeProcessError) as excinfo:
         ClaudeCodeClient().run_text("quote the diff")
 
-    assert type(excinfo.value) is ClaudeProcessError
+    assert type(excinfo.value) is ClaudeUnclassifiedProviderError
     assert not isinstance(excinfo.value, NetworkUnavailableError)
 
 
@@ -1130,7 +1131,7 @@ def test_missing_session_error_requires_explicit_resume(
     monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
     with pytest.raises(ClaudeProcessError) as excinfo:
         ClaudeCodeClient().run_json("hello", options=RunOptions(session_id="gone" if resumed else None))
-    assert type(excinfo.value) is (ClaudeSessionNotFoundError if resumed else ClaudeProcessError)
+    assert type(excinfo.value) is (ClaudeSessionNotFoundError if resumed else ClaudeUnclassifiedProviderError)
     assert excinfo.value.stdout == stdout
     assert excinfo.value.stderr == stderr
     assert excinfo.value.returncode == 1

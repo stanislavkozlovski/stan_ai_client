@@ -727,6 +727,7 @@ Provider-specific exceptions remain available:
 - `ClaudeExecutableNotFoundError`
 - `ClaudeTimeoutError`
 - `ClaudeProcessError`
+- `ClaudeUnclassifiedProviderError`
 - `ClaudeSessionNotFoundError` (failed explicit resume with missing local history)
 - `ClaudeApprovalRequiredError`
 - `ClaudeNetworkUnavailableError`
@@ -738,6 +739,7 @@ Provider-specific exceptions remain available:
 - `CodexExecutableNotFoundError`
 - `CodexTimeoutError`
 - `CodexProcessError`
+- `CodexUnclassifiedProviderError`
 - `CodexApprovalRequiredError`
 - `CodexNetworkUnavailableError`
 - `CodexProtocolError`
@@ -748,6 +750,7 @@ Provider-specific exceptions remain available:
 - `GrokExecutableNotFoundError`
 - `GrokTimeoutError`
 - `GrokProcessError`
+- `GrokUnclassifiedProviderError`
 - `GrokApprovalRequiredError`
 - `GrokNetworkUnavailableError`
 - `GrokProtocolError`
@@ -763,6 +766,7 @@ Provider-neutral base classes are also exported:
 - `AIClientTimeoutError`
 - `ExecutableNotFoundError`
 - `ProcessError`
+- `UnclassifiedProviderError`
 - `ApprovalRequiredError`
 - `NetworkUnavailableError`
 - `ProtocolError`
@@ -784,6 +788,54 @@ them, while the complete raw streams remain available as `stdout` and `stderr`.
 `GrokMalformedStructuredOutputError` also exposes a safe `detail` and
 `json_value_count`; callers can log those without copying raw model output into
 routine diagnostics.
+
+## Unclassified Provider Failures
+
+When a completed Claude, Codex, or Grok invocation fails and no existing
+specific classifier applies, it raises a provider-specific subclass of
+`UnclassifiedProviderError` instead of a plain provider `ProcessError`:
+
+| Provider | New fallback | Existing compatible catches |
+|---|---|---|
+| Claude | `ClaudeUnclassifiedProviderError` | `ClaudeProcessError`, `ClaudeCodeError` |
+| Codex | `CodexUnclassifiedProviderError` | `CodexProcessError`, `CodexCodeError` |
+| Grok | `GrokUnclassifiedProviderError` | `GrokProcessError`, `GrokCodeError` |
+
+All three are also `ProcessError` and `AIClientError` subclasses. Catch
+`UnclassifiedProviderError` before a broader `ProcessError` handler to route
+these failures separately. The legacy `stan_ai_client.client` module also
+exports the common and Claude-specific types.
+
+The fallback needs no recognized wording or error-record format. It covers
+nonzero CLI exits and native error results already treated as failures by the
+clients, including Claude/Grok error envelopes and Codex failed turns with
+exit code zero. A failed invocation without any diagnostic text is still
+unclassified. Successful output containing error-like prose remains output.
+Existing timeout, executable/working-directory, protocol, validation,
+approval, cancellation, missing-session, rate-limit, capacity, and network
+handling keeps its precedence and behavior.
+
+"Unclassified" means the client has no more specific error type. It does not
+establish whether the cause is local or remote, transient or permanent.
+Neither `rate_limit_policy` nor `provider_retry_policy` retries it, and
+`classify_provider_failure` still returns `None` for these errors. This change
+does not add capacity heuristics or correct failures already matched by an
+existing classifier.
+
+The exception retains the original message, `command`, `returncode`, `stdout`,
+`stderr`, and `payload`, including native statuses and unknown fields retained
+by the existing parsers. It is propagated directly through the client retry
+wrappers, so callers receive the new concrete type and its process evidence.
+
+Each occurrence emits one `WARNING` on the client's logger with
+`unclassified_provider_error=true`. The `LogRecord` carries
+`error_kind="unclassified_provider_error"` and `provider="claude"`, `"codex"`,
+or `"grok"`. The diagnostic is the first 200 characters of the existing error
+summary, escaped with Python's `repr` so embedded newlines remain on one log
+line. Truncating this excerpt does not alter the exception's diagnostics.
+Applications own notification delivery, deduplication, and any redaction
+needed before sending diagnostics outside their logs; the library sends no
+alerts itself.
 
 ## Network Availability
 
@@ -949,6 +1001,7 @@ At `WARNING` or `ERROR`:
 - rate-limit details
 - rate-limit retry waits and wait-budget refusals
 - capacity/server retry waits and their next retry times
+- unclassified provider failures with `error_kind` and `provider` log fields
 
 Prompt text is not logged unless `log_prompts=True`.
 

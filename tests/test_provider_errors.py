@@ -14,6 +14,7 @@ from stan_ai_client import (
     ClaudeProcessError,
     ClaudeRateLimitError,
     ClaudeServerError,
+    ClaudeUnclassifiedProviderError,
     CodexCapacityError,
     CodexClient,
     CodexProcessError,
@@ -284,7 +285,8 @@ def test_other_failures_keep_existing_classification(
 def test_claude_structured_status_wins_over_message(monkeypatch: pytest.MonkeyPatch) -> None:
     stdout = json.dumps({"is_error": True, "api_error_status": 401, "result": "API Error: 503"})
     error = fail_json(monkeypatch, "claude", stdout)
-    assert type(error) is ClaudeProcessError
+    assert type(error) is ClaudeUnclassifiedProviderError
+    assert not isinstance(error, (CapacityError, ServerError))
     assert classify_provider_failure(raw_process_error("claude", stdout)) is None
 
 

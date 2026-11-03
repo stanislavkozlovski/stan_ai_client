@@ -42,9 +42,10 @@ from .exceptions import (
     CodexStructuredOutputMissingError,
     CodexStructuredOutputValidationError,
     CodexTimeoutError,
+    CodexUnclassifiedProviderError,
 )
 from .rate_limits import is_rate_limit_text, parse_rate_limit_info
-from .provider_errors import _classify_codex_failure
+from .provider_errors import _classify_codex_failure, _log_unclassified_provider_error
 from .provider_retry import ProviderRetryPolicy
 from .schema import StructuredSchema
 from .transport import PreparedCommand, execute_command
@@ -743,12 +744,10 @@ class CodexClient:
                 error_text,
             )
         else:
-            error_cls = CodexProcessError
-            self.logger.warning(
-                "Codex run failed returncode=%d elapsed_ms=%.0f error=%s",
-                returncode,
-                command.elapsed_ms,
-                error_text,
+            error_cls = CodexUnclassifiedProviderError
+            _log_unclassified_provider_error(
+                self.logger, provider="codex", command=command,
+                returncode=returncode, message=error_text,
             )
         return error_cls(
             error_text,

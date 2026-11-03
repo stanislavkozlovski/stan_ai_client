@@ -383,6 +383,31 @@ the new types and keep client retries disabled. Grok behavior is unchanged.
 See [the retry API](./DOCS.md#provider-capacity-and-server-errors) for the shared
 classifier, backoff helper, and table renderer.
 
+Catch `UnclassifiedProviderError` to surface failed Claude, Codex, or Grok
+invocations that the client's existing classifiers do not recognize:
+
+```python
+from stan_ai_client import UnclassifiedProviderError
+
+try:
+    result = client.run_json("Continue the analysis.")
+except UnclassifiedProviderError as exc:
+    print(f"Unclassified CLI failure ({type(exc).__name__}): {exc}")
+    raise
+```
+
+The concrete types are `ClaudeUnclassifiedProviderError`,
+`CodexUnclassifiedProviderError`, and `GrokUnclassifiedProviderError`. Each
+retains its provider's `ProcessError` hierarchy and the original command,
+return code, stdout, stderr, and parsed payload. They raise immediately even
+with retries enabled: the cause may be local to the CLI or remote.
+
+Each occurrence logs `unclassified_provider_error=true` with a bounded
+diagnostic. Applications can subscribe to the log record's `error_kind` and
+`provider` fields or catch the exception for alerting. See
+[unclassified failures](./DOCS.md#unclassified-provider-failures) for the scope
+and compatibility details.
+
 Catch `NetworkUnavailableError` to handle strong provider transport-connectivity
 failures the same way for Claude, Codex, and Grok. Provider-specific catches
 remain available through `ClaudeNetworkUnavailableError`,
@@ -460,6 +485,10 @@ from stan_ai_client import (
     ClaudeProcessError,
     CodexProcessError,
     GrokProcessError,
+    UnclassifiedProviderError,
+    ClaudeUnclassifiedProviderError,
+    CodexUnclassifiedProviderError,
+    GrokUnclassifiedProviderError,
     NetworkUnavailableError,
     ClaudeNetworkUnavailableError,
     CodexNetworkUnavailableError,

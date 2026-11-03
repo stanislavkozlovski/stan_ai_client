@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import logging
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -13,7 +14,7 @@ from ._network import (
     codex_trusted_error_texts,
 )
 from .exceptions import ClaudeProcessError, CodexProcessError, ProcessError, ProviderError
-from .types import ClaudeJsonPayload, ProviderFailure
+from .types import ClaudeJsonPayload, CommandMetadata, ProviderFailure
 
 SERVER_STATUSES = {500, 502, 503, 504}
 _CLAUDE_STATUS = re.compile(r"\bAPI Error:\s*(\d{3})\b", re.IGNORECASE)
@@ -22,6 +23,22 @@ _CODEX_STATUS = re.compile(
     re.IGNORECASE,
 )
 _RETRY_AFTER = re.compile(r"\bretry[- ]after[:\s]+([^\r\n]+)", re.IGNORECASE)
+
+
+def _log_unclassified_provider_error(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    command: CommandMetadata,
+    returncode: int,
+    message: str,
+) -> None:
+    logger.warning(
+        "%s run failed returncode=%d elapsed_ms=%.0f "
+        "unclassified_provider_error=true diagnostic=%r",
+        provider, returncode, command.elapsed_ms, message[:200],
+        extra={"provider": provider, "error_kind": "unclassified_provider_error"},
+    )
 
 
 def _retry_hint(texts: tuple[str, ...]) -> float | None:
