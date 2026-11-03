@@ -10,13 +10,34 @@ from email.utils import parsedate_to_datetime
 
 from ._network import (
     CodexOutputProtocol,
+    antigravity_trusted_error_texts,
     claude_trusted_error_texts,
     codex_trusted_error_texts,
 )
-from .exceptions import ClaudeProcessError, CodexProcessError, ProcessError, ProviderError
-from .types import ClaudeJsonPayload, CommandMetadata, ProviderFailure
+from .exceptions import (
+    AntigravityProcessError,
+    ClaudeProcessError,
+    CodexProcessError,
+    ProcessError,
+    ProviderError,
+)
+from .types import (
+    AntigravityAgentError,
+    ClaudeJsonPayload,
+    CommandMetadata,
+    ProviderFailure,
+)
 
 SERVER_STATUSES = {500, 502, 503, 504}
+# Google API error reasons and agy's own overload messages. A capacity failure
+# often arrives as HTTP 429 RESOURCE_EXHAUSTED, so it must win over quota.
+_ANTIGRAVITY_CAPACITY_MARKERS = (
+    ("model_capacity_exhausted", "MODEL_CAPACITY_EXHAUSTED"),
+    ("prefill_queue_overloaded", "PREFILL_QUEUE_OVERLOADED"),
+    ("overloaded prefill queue", "PREFILL_QUEUE_OVERLOADED"),
+    ("model api is currently overloaded", "overloaded"),
+    ("model api overloaded", "overloaded"),
+)
 _CLAUDE_STATUS = re.compile(r"\bAPI Error:\s*(\d{3})\b", re.IGNORECASE)
 _CODEX_STATUS = re.compile(
     r"\b(?:unexpected status(?: code)?|exceeded retry limit,\s*last status:)\s*(\d{3})\b",
@@ -111,19 +132,59 @@ def _classify_codex_failure(texts: tuple[str, ...]) -> ProviderFailure | None:
     return None
 
 
+def _classify_antigravity_failure(
+    texts: tuple[str, ...], *, agent_error: AntigravityAgentError | None
+) -> ProviderFailure | None:
+    """Classify agy's ``AGY_ERROR`` HTTP status, then its trusted failure texts.
+
+    Only HTTP-kind codes are treated as statuses: gRPC-kind codes describe
+    agy's internal calls, and their UNAVAILABLE also covers connectivity loss.
+    """
+    if (
+        agent_error is not None
+        and agent_error.code_kind == "http"
+        and agent_error.error_code is not None
+    ):
+        status = agent_error.error_code
+        message = agent_error.short_error or (
+            texts[0] if texts else f"Antigravity API error: {status}"
+        )
+        if status == 529:
+            return ProviderFailure("capacity", "529", message, _retry_hint(texts))
+        if status in SERVER_STATUSES:
+            return ProviderFailure("server_error", str(status), message, _retry_hint(texts))
+    for text in texts:
+        folded = text.casefold()
+        for marker, signal in _ANTIGRAVITY_CAPACITY_MARKERS:
+            if marker in folded:
+                return ProviderFailure("capacity", signal, text, _retry_hint(texts))
+    return None
+
+
 def classify_provider_failure(
     error: ProcessError,
     *,
     codex_output_protocol: CodexOutputProtocol = "unstructured",
 ) -> ProviderFailure | None:
-    """Classify Claude/Codex process evidence, never assistant or tool output.
+    """Classify Claude/Codex/Antigravity process evidence, never assistant or tool output.
 
     Codex stderr defaults to guarded ``ERROR:`` lines. Pass ``jsonl`` only for
     JSON exec mode, where stderr is diagnostic rather than model prose.
-    Grok and every error outside the two provider families remain unchanged.
+    Antigravity uses its ``AGY_ERROR`` record, result error, and ``error:``
+    lines. Grok and every error outside these provider families remain unchanged.
     """
     if isinstance(error, ProviderError):
         return error.failure
+    if isinstance(error, AntigravityProcessError):
+        agent_error = error.agent_error
+        return _classify_antigravity_failure(
+            antigravity_trusted_error_texts(
+                payload=error.payload,
+                stderr=error.stderr,
+                agent_error=agent_error,
+            ),
+            agent_error=agent_error,
+        )
     if isinstance(error, ClaudeProcessError):
         return _classify_claude_failure(
             claude_trusted_error_texts(
