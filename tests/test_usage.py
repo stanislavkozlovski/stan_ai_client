@@ -435,3 +435,89 @@ def test_live_codex_0_154_0_resume_fixture_uses_session_delta() -> None:
     assert resumed.tokens == TokenUsage(236, 17280, 0, 15, 0, 0, 17531)
     assert normalize_ai_usage("codex", fixture["resume"]).tokens.total_tokens is None
     assert resumed.raw["usage"]["output_tokens"] == 30
+
+
+
+def antigravity(
+    scope: str = "invocation",
+    *,
+    input_tokens: Any = 7000,
+    cache_read: Any = 5000,
+    output: Any = 30,
+    thinking: Any = 20,
+    **fields: Any,
+) -> dict[str, Any]:
+    usage = {
+        "input_tokens": input_tokens,
+        "cache_read_tokens": cache_read,
+        "output_tokens": output,
+        "thinking_tokens": thinking,
+    }
+    if type(input_tokens) is int and type(output) is int:
+        usage["total_tokens"] = input_tokens + output  # agy omits cache reads here
+    return {"conversation_id": "conversation", "usage_scope": scope, "usage": usage, **fields}
+
+
+def test_antigravity_cache_reads_are_separate_from_input_and_thinking_is_output() -> None:
+    facts = normalize_ai_usage("antigravity", antigravity(requested_model="gemini-4-argon"))
+    assert facts.tokens == TokenUsage(7000, 5000, None, 30, 20, 0, 12030)
+    assert facts.session_id == "conversation"
+    assert facts.models[0].model == "gemini-4-argon"
+    assert facts.models[0].model_source == "requested"
+
+
+def test_antigravity_live_cached_step_counts_every_prompt_token() -> None:
+    # agy 1.4.12 step after caching began: 2,883 uncached + 15,955 cached prompt
+    # tokens (the context had grown to ~18.8k); agy's total_tokens was 3,040.
+    facts = normalize_ai_usage(
+        "antigravity", antigravity(input_tokens=2883, cache_read=15955, output=157, thinking=0)
+    )
+    assert facts.tokens == TokenUsage(2883, 15955, None, 157, 0, 0, 18995)
+    assert facts.raw["usage"]["total_tokens"] == 3040
+    assert not any("cache split" in item for item in facts.diagnostics)
+
+
+def test_antigravity_missing_cache_counter_leaves_total_unavailable() -> None:
+    facts = normalize_ai_usage("antigravity", antigravity(cache_read=None))
+    assert facts.tokens.fresh_input_tokens == 7000
+    assert facts.tokens.cache_read_input_tokens is None
+    assert facts.tokens.total_tokens is None
+
+
+def test_antigravity_cumulative_scope_prefers_step_usage() -> None:
+    payload = antigravity(
+        "cumulative",
+        step_usage={
+            "input_tokens": 100,
+            "cache_read_tokens": 40,
+            "output_tokens": 5,
+            "thinking_tokens": 2,
+            "total_tokens": 105,
+        },
+    )
+    facts = normalize_ai_usage("antigravity", payload)
+    assert facts.tokens == TokenUsage(100, 40, None, 5, 2, 0, 145)
+    assert facts.raw["usage"]["input_tokens"] == 7000
+
+
+def test_antigravity_cumulative_without_steps_uses_previous_snapshot() -> None:
+    previous = antigravity("invocation", input_tokens=3000, cache_read=1000, output=10, thinking=5)
+    current = antigravity("cumulative")
+    facts = normalize_ai_usage("antigravity", current, previous_snapshot=previous)
+    assert facts.tokens == TokenUsage(4000, 4000, None, 20, 15, 0, 8020)
+    assert "invocation delta from cumulative baseline" in facts.diagnostics
+
+    unavailable = normalize_ai_usage("antigravity", current)
+    assert unavailable.tokens == TokenUsage()
+
+
+def test_antigravity_unknown_scope_needs_step_usage() -> None:
+    assert normalize_ai_usage("antigravity", antigravity("unknown")).tokens == TokenUsage()
+    facts = normalize_ai_usage(
+        "antigravity",
+        antigravity(
+            "unknown",
+            step_usage={"input_tokens": 9, "cache_read_tokens": 0, "output_tokens": 1},
+        ),
+    )
+    assert facts.tokens.total_tokens == 10

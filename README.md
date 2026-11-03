@@ -3,9 +3,10 @@
 `stan_ai_client` is a thin Python wrapper around local AI coding CLIs.
 
 It supports Claude Code through the local `claude` executable, Codex through
-the local `codex exec` executable, and Grok through the local `grok` executable
-(`grok -p`). It does not call Anthropic, OpenAI, or xAI APIs directly; the
-relevant CLI must already be installed and authenticated on the machine.
+the local `codex exec` executable, Grok through the local `grok` executable
+(`grok -p`), and Google Antigravity through the local `agy` executable. It does
+not call Anthropic, OpenAI, xAI, or Google APIs directly; the relevant CLI must
+already be installed and authenticated on the machine.
 
 The library is intentionally small and pragmatic:
 
@@ -17,7 +18,7 @@ The library is intentionally small and pragmatic:
 - local JSON Schema validation
 - rate-limit parsing helpers
 - opt-in rate-limit retry policy
-- opt-in Claude/Codex capacity and server-error retries with cancellation
+- opt-in Claude/Codex/Antigravity capacity and server-error retries with cancellation
 - stdlib logging
 
 ## Why Use It
@@ -73,13 +74,15 @@ pip install "git+https://github.com/<your-user>/stan_ai_client.git"
 
 ## Quickstart
 
-### 1. Install Claude Code or Codex
+### 1. Install Claude Code, Codex, Grok, or Antigravity
 
 Make sure the CLI you want is already available on your machine and authenticated:
 
 ```bash
 claude --version
 codex --version
+grok --version
+agy --version
 ```
 
 ### 2. Run the smoke test
@@ -87,6 +90,7 @@ codex --version
 ```bash
 python examples/smoke_test.py
 python examples/codex_smoke_test.py
+python examples/antigravity_smoke_test.py
 ```
 
 Those run text-mode and JSON-mode calls against the selected local CLI.
@@ -277,9 +281,64 @@ Grok permission rules and built-in tool filtering are separate APIs:
 `permission_allow_rules` / `permission_deny_rules` map to `--allow` / `--deny`,
 while `tools` / `excluded_tools` map to `--tools` / `--disallowed-tools`.
 
+### Antigravity text / JSON / structured
+
+```python
+from stan_ai_client import AntigravityClient, AntigravityRunOptions, StructuredSchema
+
+client = AntigravityClient()  # gemini-4-argon, effort high, --dangerously-skip-permissions
+
+result = client.run_text("Reply with the single word: ok")
+print(result.text)
+
+first = client.run_json("Remember the code word walrus. Reply: noted")
+print(first.payload.conversation_id, first.payload.usage)
+
+again = client.run_json(
+    "What was the code word?",
+    options=AntigravityRunOptions(session_id=first.payload.conversation_id),
+)
+print(again.payload.response, again.payload.invocation_usage)
+
+schema = StructuredSchema.from_dict(
+    {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+        "additionalProperties": False,
+    }
+)
+structured = client.run_structured("Capital of France?", schema=schema)
+print(structured.structured_output["answer"])
+```
+
+`AntigravityClient` drives Antigravity's headless mode. By default each prompt
+goes to `agy` as one `stream-json` message on stdin, so long prompts work and
+prompts never appear in argv; `AntigravityRunOptions(input_mode="argv")` uses
+`--print=<prompt>` instead. JSON and structured calls parse agy's
+`stream-json` events, so `.stdout` holds NDJSON and `.payload` exposes the
+final result plus `events`. agy reports conversation-wide usage after a
+resume; `payload.invocation_usage` and `normalize_ai_usage("antigravity",
+payload)` give this call's tokens.
+
+Antigravity effort levels are model-specific: current models accept `low`,
+`medium`, and `high` (`gpt-oss-120b` only `medium`). Pass a base model name
+such as `claude-opus-5-5` with `effort`, or construct the client with
+`default_effort=None` to let agy choose.
+
+The client also guards three agy behaviors that would otherwise look like
+success: a resumed conversation that agy could not find (it silently starts a
+new one) raises `AntigravitySessionNotFoundError`; a resumed structured call
+whose new answer failed the schema (agy re-reports the previous turn's
+`structured_output`) raises `AntigravityStructuredOutputMissingError`; and a
+turn cut off by `print_timeout_seconds` raises `AntigravityTimeoutError` with
+the partial payload. See [the Antigravity guide](./DOCS.md#antigravityclient)
+and [RFC_ANTIGRAVITY_SUPPORT.md](./RFC_ANTIGRAVITY_SUPPORT.md) for how `agy`
+behaves headlessly.
+
 ### Automatic permission review
 
-All three clients accept `permission_mode="auto"`. Approval stops remain
+All four clients accept `permission_mode="auto"`. Approval stops remain
 non-interactive and surface through the provider-neutral error type:
 
 ```python
@@ -353,9 +412,9 @@ except ClaudeRateLimitError as exc:
     print(exc.reset_at or exc.retry_after_seconds)
 ```
 
-Claude and Codex can also wait out provider capacity failures and HTTP 500,
-502, 503, and 504 errors. Enable this separately on `run_text`, `run_json`, or
-`run_structured`:
+Claude, Codex, and Antigravity can also wait out provider capacity failures and
+HTTP 500, 502, 503, and 504 errors. Enable this separately on `run_text`,
+`run_json`, or `run_structured`:
 
 ```python
 from stan_ai_client import CodexClient, ProviderRetryPolicy, ServerErrorWindowExceeded
@@ -375,8 +434,9 @@ an instruction to continue the work already done. Call `policy.cancel.set()`
 from another thread to interrupt a wait; it does not terminate a running CLI.
 
 Without `provider_retry_policy`, both failure kinds raise immediately.
-`ClaudeCapacityError` (including HTTP 529) and `CodexCapacityError` inherit
-`CapacityError`; their server counterparts inherit `ServerError`. They remain
+`ClaudeCapacityError` (including HTTP 529), `CodexCapacityError`, and
+`AntigravityCapacityError` inherit `CapacityError`; their server counterparts
+inherit `ServerError`. They remain
 their provider's `ProcessError` subtypes. **A Claude 529 no longer raises
 `ClaudeRateLimitError`.** Controllers that own their own waits should catch
 the new types and keep client retries disabled. Grok behavior is unchanged.
@@ -409,9 +469,10 @@ diagnostic. Applications can subscribe to the log record's `error_kind` and
 and compatibility details.
 
 Catch `NetworkUnavailableError` to handle strong provider transport-connectivity
-failures the same way for Claude, Codex, and Grok. Provider-specific catches
-remain available through `ClaudeNetworkUnavailableError`,
-`CodexNetworkUnavailableError`, and `GrokNetworkUnavailableError`.
+failures the same way for Claude, Codex, Grok, and Antigravity. Provider-specific
+catches remain available through `ClaudeNetworkUnavailableError`,
+`CodexNetworkUnavailableError`, `GrokNetworkUnavailableError`, and
+`AntigravityNetworkUnavailableError`.
 
 ```python
 from stan_ai_client import NetworkUnavailableError
@@ -426,7 +487,9 @@ The exception preserves the command metadata, return code, stdout, stderr, and
 parsed payload. The client classifies strong DNS and routing diagnostics from
 provider-declared error records and guarded process diagnostics. Claude and Grok
 inspect process stderr plus guarded stdout error lines (`API Error:` for Claude
-and `Error:` for Grok). Codex inspects JSONL errors and JSON-mode stderr; because
+and `Error:` for Grok). Antigravity inspects its result `error`, the
+`AGY_ERROR` short error, and `error:` stderr lines. Codex inspects JSONL errors
+and JSON-mode stderr; because
 text- and structured-mode stderr also carries progress, only `ERROR:`-prefixed
 lines are inspected in those modes. Claude's declared `Unable to connect to API`
 and `Connection closed mid-response` errors are also recognized. Ordinary model
@@ -441,6 +504,30 @@ Top-level exports:
 ```python
 from stan_ai_client import (
     __version__,
+    AntigravityClient,
+    AntigravityEffort,
+    AntigravityPermissionMode,
+    AntigravityRunOptions,
+    AntigravityJsonPayload,
+    AntigravityJsonRunResult,
+    AntigravityStructuredRunResult,
+    AntigravityAgentError,
+    AntigravityCodeError,
+    AntigravityProcessError,
+    AntigravityApprovalRequiredError,
+    AntigravityCapacityError,
+    AntigravityServerError,
+    AntigravityExecutableNotFoundError,
+    AntigravityLimitError,
+    AntigravityNetworkUnavailableError,
+    AntigravityProtocolError,
+    AntigravityRateLimitError,
+    AntigravitySchemaValidationError,
+    AntigravitySessionNotFoundError,
+    AntigravityStructuredOutputMissingError,
+    AntigravityStructuredOutputValidationError,
+    AntigravityTimeoutError,
+    validate_antigravity_output_schema,
     ClaudeCodeClient,
     ClaudeEffort,
     PermissionMode,
@@ -517,7 +604,8 @@ from stan_ai_client import (
 ```
 
 Effort types are provider-specific: use `ClaudeEffort`,
-`CodexReasoningEffort`, or `GrokEffort` when annotating configuration. This
+`CodexReasoningEffort`, `GrokEffort`, or `AntigravityEffort` when annotating
+configuration. This
 keeps each CLI's vocabulary explicit while the provider validates support for
 the selected model.
 
@@ -533,6 +621,7 @@ the selected model.
 - support for Claude CLI flags via typed `RunOptions`
 - support for Codex CLI flags via typed `CodexRunOptions`
 - support for Grok CLI flags via typed `GrokRunOptions`
+- support for Antigravity (`agy`) flags via typed `AntigravityRunOptions`
 - provider-native automatic permission review with typed approval failures
 - raw stdout and stderr preserved on results and errors
 - opt-in stdlib logging with safe default prompt handling
@@ -546,6 +635,7 @@ the selected model.
 - [examples/smoke_test.py](./examples/smoke_test.py)
 - [examples/codex_smoke_test.py](./examples/codex_smoke_test.py)
 - [examples/grok_smoke_test.py](./examples/grok_smoke_test.py)
+- [examples/antigravity_smoke_test.py](./examples/antigravity_smoke_test.py)
 - [examples/summarize_article.py](./examples/summarize_article.py)
 - [examples/tag_article.py](./examples/tag_article.py)
 - [examples/logging_demo.py](./examples/logging_demo.py)
@@ -578,6 +668,10 @@ See [DOCS.md](./DOCS.md) for:
   `normalize_ai_usage(provider, result.payload)` returns token facts without pricing
 - Codex defaults to `--dangerously-bypass-approvals-and-sandbox`
 - Grok uses `grok -p --output-format plain|json` (prompt via arg or --prompt-file transparently)
+- Antigravity uses `agy --input-format stream-json --output-format stream-json`
+  by default (prompt on stdin), or `--print=<prompt>` in argv mode
+- Antigravity defaults to `--dangerously-skip-permissions` and sets
+  `AGY_CLI_DISABLE_AUTO_UPDATE=1` unless the caller's env already sets it
 - logging uses stdlib `logging`
 - prompts are not written to logs unless `log_prompts=True`
 - the library is sync-only in `0.1.x`
@@ -598,6 +692,7 @@ See [DOCS.md](./DOCS.md) for:
 For unsupported Claude Code flags, use `RunOptions(extra_args=...)`. For
 unsupported Codex exec flags, use `CodexRunOptions(extra_args=...)`; for
 unsupported Codex resume flags, use `CodexRunOptions(resume_extra_args=...)`.
+For unsupported `agy` flags, use `AntigravityRunOptions(extra_args=...)`.
 
 ## Development
 

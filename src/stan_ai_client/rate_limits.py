@@ -45,6 +45,36 @@ def is_grok_rate_limit_text(text: str) -> bool:
     return "resource exhausted" in normalized
 
 
+_ANTIGRAVITY_RATE_LIMIT_MARKERS = (
+    "resource exhausted",
+    "exhausted your quota",
+    "quota exhausted",
+    "individual quota reached",
+    "rate limit",
+    "ratelimit",
+    "too many requests",
+    "credits balance is too low",
+)
+# Go reports EDQUOT as "disk quota exceeded", which is not a provider quota.
+_QUOTA_EXCEEDED = re.compile(r"(?<!disk )quota exceeded")
+_STANDALONE_429 = re.compile(r"\b429\b")
+
+
+def is_antigravity_rate_limit_text(text: str) -> bool:
+    """Quota and rate-limit wording from agy and the Google APIs behind it.
+
+    Narrower than the shared markers: agy diagnostics embed UUIDs, so ``429``
+    must stand alone, and capacity wording such as ``overloaded`` is classified
+    separately before rate limits.
+    """
+    normalized = text.lower().replace("_", " ").replace("-", " ")
+    return (
+        any(marker in normalized for marker in _ANTIGRAVITY_RATE_LIMIT_MARKERS)
+        or _QUOTA_EXCEEDED.search(normalized) is not None
+        or _STANDALONE_429.search(text) is not None
+    )
+
+
 def parse_rate_limit_info(
     text: str,
     *,

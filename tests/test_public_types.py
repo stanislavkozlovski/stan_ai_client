@@ -1,27 +1,52 @@
 from typing import get_args
 
 from stan_ai_client import (
+    AIClientTimeoutError,
+    AntigravityApprovalRequiredError,
+    AntigravityCapacityError,
+    AntigravityCodeError,
+    AntigravityEffort,
+    AntigravityLimitError,
+    AntigravityNetworkUnavailableError,
+    AntigravityPermissionMode,
+    AntigravityProcessError,
+    AntigravityProtocolError,
+    AntigravityRateLimitError,
+    AntigravitySchemaValidationError,
+    AntigravityServerError,
+    AntigravitySessionNotFoundError,
+    AntigravityStructuredOutputMissingError,
+    AntigravityStructuredOutputValidationError,
+    AntigravityTimeoutError,
     ApprovalRequiredError,
+    CapacityError,
     ClaudeApprovalRequiredError,
     ClaudeCodeError,
     ClaudeEffort,
     ClaudeNetworkUnavailableError,
     ClaudeProcessError,
     ClaudeSessionNotFoundError,
-    CodexCodeError,
     CodexApprovalRequiredError,
+    CodexCodeError,
     CodexNetworkUnavailableError,
+    CodexPermissionMode,
     CodexProcessError,
     CodexReasoningEffort,
-    CodexPermissionMode,
     GrokApprovalRequiredError,
     GrokCodeError,
     GrokEffort,
     GrokNetworkUnavailableError,
     GrokPermissionMode,
     GrokProcessError,
+    LimitError,
     NetworkUnavailableError,
     PermissionMode,
+    ProtocolError,
+    RateLimitError,
+    ServerError,
+    StructuredOutputMissingError,
+    StructuredOutputValidationError,
+    StructuredSchemaValidationError,
 )
 from stan_ai_client.types import Effort, ReasoningEffort
 
@@ -81,3 +106,43 @@ def test_network_exception_types_are_public_and_provider_compatible() -> None:
 def test_missing_session_error_is_public_and_process_compatible() -> None:
     assert issubclass(ClaudeSessionNotFoundError, ClaudeProcessError)
     assert issubclass(ClaudeSessionNotFoundError, ClaudeCodeError)
+
+
+def test_antigravity_effort_and_permission_vocabularies() -> None:
+    assert get_args(AntigravityEffort) == ("low", "medium", "high", "xhigh", "max")
+    assert get_args(AntigravityPermissionMode) == (
+        "default",
+        "acceptEdits",
+        "plan",
+        "auto",
+        "bypassPermissions",
+    )
+
+
+def test_antigravity_exception_hierarchy_matches_other_providers() -> None:
+    for error_type in (
+        AntigravityApprovalRequiredError,
+        AntigravityCapacityError,
+        AntigravityServerError,
+        AntigravityNetworkUnavailableError,
+        AntigravityRateLimitError,
+        AntigravitySessionNotFoundError,
+    ):
+        assert issubclass(error_type, AntigravityProcessError)
+        assert issubclass(error_type, AntigravityCodeError)
+    assert issubclass(AntigravityApprovalRequiredError, ApprovalRequiredError)
+    assert issubclass(AntigravityCapacityError, CapacityError)
+    assert issubclass(AntigravityServerError, ServerError)
+    assert issubclass(AntigravityNetworkUnavailableError, NetworkUnavailableError)
+    assert issubclass(AntigravityRateLimitError, RateLimitError)
+    assert issubclass(AntigravityRateLimitError, AntigravityLimitError)
+    assert issubclass(AntigravityLimitError, LimitError)
+    assert issubclass(AntigravityProtocolError, ProtocolError)
+    assert issubclass(AntigravityStructuredOutputMissingError, StructuredOutputMissingError)
+    assert issubclass(AntigravityStructuredOutputMissingError, AntigravityProtocolError)
+    assert issubclass(
+        AntigravityStructuredOutputValidationError, StructuredOutputValidationError
+    )
+    assert issubclass(AntigravityTimeoutError, AIClientTimeoutError)
+    assert issubclass(AntigravityTimeoutError, AntigravityCodeError)
+    assert issubclass(StructuredSchemaValidationError, AntigravitySchemaValidationError)

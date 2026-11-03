@@ -8,6 +8,7 @@ from typing import Any, Generic, Literal, Mapping, TypeVar
 ClaudeEffort = Literal["low", "medium", "high", "xhigh", "max"]
 CodexReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh", "max"]
 GrokEffort = Literal["low", "medium", "high", "xhigh", "max"]
+AntigravityEffort = Literal["low", "medium", "high", "xhigh", "max"]
 
 # Backward-compatible aliases. New code should use the provider-specific names.
 Effort = ClaudeEffort
@@ -22,7 +23,15 @@ PermissionMode = Literal[
 ]
 CodexPermissionMode = Literal["default", "bypassPermissions", "auto"]
 GrokPermissionMode = PermissionMode
+AntigravityPermissionMode = Literal[
+    "default",
+    "acceptEdits",
+    "plan",
+    "auto",
+    "bypassPermissions",
+]
 InputMode = Literal["stdin", "argv"]
+UsageScope = Literal["invocation", "cumulative", "unknown"]
 TStructured = TypeVar("TStructured")
 
 
@@ -103,6 +112,37 @@ class GrokRunOptions:
     system_prompt: str | None = None
     add_dirs: tuple[str | Path, ...] | None = None
     max_turns: int | None = None
+    extra_args: tuple[str, ...] | None = None
+    env: Mapping[str, str] | None = None
+
+
+@dataclass(frozen=True)
+class AntigravityRunOptions:
+    """Options for one ``agy`` invocation.
+
+    ``session_id`` resumes an Antigravity conversation (``--conversation``).
+    ``input_mode="stdin"`` (the default) sends the prompt as one stream-json
+    message on stdin; ``"argv"`` passes it as ``--print=<prompt>``.
+    ``sandbox`` and ``disable_slash_commands`` emit ``--flag`` for ``True`` and
+    ``--flag=false`` for ``False``; ``None`` leaves the CLI setting alone.
+    """
+
+    cwd: str | Path | None = None
+    model: str | None = None
+    effort: AntigravityEffort | None = None
+    timeout_seconds: float | None = None
+    input_mode: InputMode | None = None
+    permission_mode: AntigravityPermissionMode | None = None
+    session_id: str | None = None
+    continue_last_session: bool | None = None
+    add_dirs: tuple[str | Path, ...] | None = None
+    agent: str | None = None
+    project: str | None = None
+    settings: str | None = None
+    sandbox: bool | None = None
+    disable_slash_commands: bool | None = None
+    print_timeout_seconds: float | None = None
+    log_file: str | Path | None = None
     extra_args: tuple[str, ...] | None = None
     env: Mapping[str, str] | None = None
 
@@ -300,6 +340,153 @@ class GrokJsonPayload:
         )
 
 
+def _str_or_none(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _int_or_none(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+@dataclass(frozen=True)
+class AntigravityAgentError:
+    """The structured ``AGY_ERROR: {...}`` record ``agy`` prints on stderr.
+
+    ``status`` is a canonical status name such as ``RESOURCE_EXHAUSTED``.
+    ``error_code`` is an HTTP status when ``code_kind`` is ``"http"`` and a
+    gRPC code number when it is ``"grpc"``. ``retryable`` is agy's own verdict.
+    """
+
+    short_error: str | None
+    status: str | None
+    error_code: int | None
+    code_kind: str | None
+    retryable: bool | None
+    error_id: str | None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "AntigravityAgentError":
+        retryable = data.get("retryable")
+        return cls(
+            short_error=_str_or_none(data.get("short_error")),
+            status=_str_or_none(data.get("status")),
+            error_code=_int_or_none(data.get("error_code")),
+            code_kind=_str_or_none(data.get("code_kind")),
+            retryable=retryable if isinstance(retryable, bool) else None,
+            error_id=_str_or_none(data.get("error_id")),
+            raw=dict(data),
+        )
+
+
+@dataclass(frozen=True)
+class AntigravityJsonPayload:
+    """The final ``result`` of one ``agy`` stream-json run plus its events.
+
+    ``usage``, ``num_turns``, and ``duration_seconds`` are agy's
+    conversation-wide totals, so they are cumulative when the run resumed a
+    conversation; ``usage_scope`` records which. ``step_usage`` sums the usage
+    of the steps this invocation completed and is ``None`` when the stream was
+    incomplete. ``invocation_usage`` picks the per-invocation counters.
+    ``duration_ms`` is measured client-side and ``requested_model`` is the
+    ``--model`` value the client sent, if any.
+    """
+
+    conversation_id: str | None
+    status: str | None
+    response: str | None
+    error: str | None
+    finished_reason: str | None
+    duration_seconds: float | None
+    num_turns: int | None
+    usage: dict[str, Any]
+    denied_actions: tuple[dict[str, Any], ...]
+    structured_output: Any | None
+    extras: dict[str, Any] = field(default_factory=dict)
+    events: tuple[dict[str, Any], ...] = ()
+    step_usage: dict[str, int] | None = None
+    usage_scope: UsageScope = "unknown"
+    requested_model: str | None = None
+    duration_ms: int | None = None
+    stream_diagnostics: tuple[str, ...] = ()
+    _structured_output_present: bool = field(default=False, repr=False)
+
+    @property
+    def session_id(self) -> str | None:
+        """Cross-provider alias for ``conversation_id``."""
+        return self.conversation_id
+
+    @property
+    def has_structured_output(self) -> bool:
+        return self._structured_output_present
+
+    @property
+    def permission_mode(self) -> str | None:
+        """The tool-approval posture agy reported in its ``init`` event."""
+        for event in self.events:
+            init = event.get("init") if event.get("event") == "init" else None
+            if isinstance(init, dict):
+                return _str_or_none(init.get("permission_mode"))
+        return None
+
+    @property
+    def invocation_usage(self) -> dict[str, Any] | None:
+        """Usage counters for this invocation only, when they are known."""
+        if self.usage_scope == "invocation":
+            return self.usage
+        return self.step_usage
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: Mapping[str, Any],
+        *,
+        events: tuple[dict[str, Any], ...] = (),
+        step_usage: dict[str, int] | None = None,
+        stream_diagnostics: tuple[str, ...] = (),
+    ) -> "AntigravityJsonPayload":
+        used = {
+            "conversation_id",
+            "status",
+            "response",
+            "error",
+            "finished_reason",
+            "duration_seconds",
+            "num_turns",
+            "usage",
+            "denied_actions",
+            "structured_output",
+        }
+        duration = data.get("duration_seconds")
+        raw_usage = data.get("usage")
+        raw_denied = data.get("denied_actions")
+        return cls(
+            conversation_id=_str_or_none(data.get("conversation_id")) or None,
+            status=_str_or_none(data.get("status")),
+            response=_str_or_none(data.get("response")),
+            error=_str_or_none(data.get("error")),
+            finished_reason=_str_or_none(data.get("finished_reason")),
+            duration_seconds=(
+                float(duration)
+                if isinstance(duration, (int, float)) and not isinstance(duration, bool)
+                else None
+            ),
+            num_turns=_int_or_none(data.get("num_turns")),
+            usage=dict(raw_usage) if isinstance(raw_usage, dict) else {},
+            denied_actions=(
+                tuple(dict(item) for item in raw_denied if isinstance(item, dict))
+                if isinstance(raw_denied, list)
+                else ()
+            ),
+            structured_output=data.get("structured_output"),
+            extras={key: value for key, value in data.items() if key not in used},
+            events=events,
+            step_usage=step_usage,
+            stream_diagnostics=stream_diagnostics,
+            _structured_output_present="structured_output" in data,
+        )
+
+
 @dataclass(frozen=True)
 class TextRunResult:
     command: CommandMetadata
@@ -363,4 +550,23 @@ class GrokStructuredRunResult(Generic[TStructured]):
     stderr: str
     returncode: int
     payload: GrokJsonPayload
+    structured_output: TStructured
+
+
+@dataclass(frozen=True)
+class AntigravityJsonRunResult:
+    command: CommandMetadata
+    stdout: str
+    stderr: str
+    returncode: int
+    payload: AntigravityJsonPayload
+
+
+@dataclass(frozen=True)
+class AntigravityStructuredRunResult(Generic[TStructured]):
+    command: CommandMetadata
+    stdout: str
+    stderr: str
+    returncode: int
+    payload: AntigravityJsonPayload
     structured_output: TStructured
