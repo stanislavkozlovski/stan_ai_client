@@ -5,19 +5,20 @@
 `stan_ai_client` is a small synchronous Python wrapper around local AI coding
 CLI executables.
 
-It currently supports three backend clients:
+It currently supports four backend clients:
 
 - `ClaudeCodeClient` shells out to `claude -p`.
 - `CodexClient` shells out to `codex exec`.
 - `GrokClient` shells out to `grok -p` (with transparent prompt handling).
+- `AntigravityClient` shells out to `agy` in headless `stream-json` mode.
 
-The package does not call Anthropic or OpenAI APIs directly. Authentication,
+The package does not call Anthropic, OpenAI, xAI, or Google APIs directly. Authentication,
 account selection, and provider configuration stay in the underlying CLI. The
 library builds commands, captures stdout and stderr, parses supported machine
 output, validates structured responses locally, and normalizes failures into
 typed exceptions.
 
-Both clients expose:
+All clients expose:
 
 - `run_text()` for plain text
 - `run_json()` for machine-readable output
@@ -28,9 +29,10 @@ policy is a synchronous wrapper around one-attempt execution: it catches the
 client's typed rate-limit exception, sleeps only when parsed reset metadata fits
 the caller's wait budget, logs the wait, and retries the same operation.
 
-Claude and Codex raise typed capacity and server errors, classified before
-quota and network checks from Claude's native API status or the trusted
-diagnostics that network detection reads. Their modes can also opt into a
+Claude, Codex, and Antigravity raise typed capacity and server errors,
+classified before quota and network checks from Claude's native API status,
+Antigravity's `AGY_ERROR` record, or the trusted diagnostics that network
+detection reads. Their modes can also opt into a
 `ProviderRetryPolicy`, which runs outside the rate-limit wrapper: it waits with
 cancellable backoff and resends the original prompt prefixed with
 `PROVIDER_RETRY_PREFIX`. Neither wrapper resets the other's budget, so one call
@@ -55,6 +57,27 @@ The returned `GrokJsonPayload` is intentionally minimal (text + ids + optional
 structuredOutput). Structured mode also accepts newer Grok builds that return
 the raw validated JSON value from `--json-schema`. Duration is measured
 client-side.
+
+### Antigravity text / JSON / structured mode
+
+1. `AntigravityClient.run_*()` applies optional provider and rate-limit retries
+2. single-attempt execution resolves `AntigravityRunOptions` and maps the
+   permission vocabulary to `--dangerously-skip-permissions` or `--mode`
+3. `antigravity.py` builds `agy ... --input-format stream-json
+   --output-format stream-json` and writes one stream-json user message to
+   stdin (default), or appends `--print=<prompt>` in argv mode
+4. structured mode first checks the schema root is an object, then adds
+   `--json-schema <compact-json>`
+5. `transport.execute_command()` runs agy
+6. `antigravity_parser.py` decodes the events into `AntigravityJsonPayload`
+   (final `result`, events, and summed per-step usage) and parses the
+   `AGY_ERROR` stderr record
+7. the client raises for a non-zero exit, a non-`SUCCESS` result, any
+   `finished_reason` (`print_timeout` as a timeout), a missing resumed
+   conversation, auto-mode `denied_actions`, and, for resumed structured
+   calls, `structured_output` without a completed `finish` step
+8. structured output is validated locally; text calls return the result's
+   `response` (or plain stdout in argv mode)
 
 ### Claude text mode
 
@@ -131,6 +154,11 @@ facts into disjoint token allocations without I/O or consumer context.
 - `src/stan_ai_client/grok.py`: `GrokClient`, Grok command preparation (using
   `-p`), execution, prompt file fallback, logging, and error normalization
 - `src/stan_ai_client/grok_parser.py`: Grok JSON envelope parsing
+- `src/stan_ai_client/antigravity.py`: `AntigravityClient`, `agy` command
+  preparation, stream-json execution, approval/session/timeout guards,
+  logging, and error normalization
+- `src/stan_ai_client/antigravity_parser.py`: `agy` stream-json decoding,
+  per-step usage sums, `AGY_ERROR` records, and stderr notices
 - `src/stan_ai_client/client.py`: compatibility shim that re-exports
   `ClaudeCodeClient` for existing imports
 - `src/stan_ai_client/codex.py`: `CodexClient`, Codex command preparation,
@@ -144,8 +172,9 @@ facts into disjoint token allocations without I/O or consumer context.
   exception hierarchy
 - `src/stan_ai_client/_network.py`: provider-aware transport-connectivity
   detection over provider-declared error records and guarded process diagnostics
-- `src/stan_ai_client/provider_errors.py`: Claude/Codex capacity and
-  server-error classification over those trusted diagnostics, with retry hints
+- `src/stan_ai_client/provider_errors.py`: Claude/Codex/Antigravity capacity
+  and server-error classification over those trusted diagnostics, with retry
+  hints
 - `src/stan_ai_client/provider_retry.py`: `ProviderRetryPolicy`, backoff, the
   cancellable provider retry loop, and the failed-attempt table
 - `src/stan_ai_client/_retry.py`: the rate-limit retry loop and its composition
@@ -166,7 +195,8 @@ Prompt text is only logged when `log_prompts=True`.
 
 Claude argv logs redact system prompts, settings, resumed session IDs, and inline
 JSON schemas. Codex argv logs redact config override values, temporary schema
-paths, and prompts passed through argv mode.
+paths, and prompts passed through argv mode. Antigravity argv logs redact
+`--print=` prompts, `--conversation` IDs, `--settings`, and inline JSON schemas.
 
 ## Database Schema
 

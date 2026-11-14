@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from .antigravity_parser import parse_antigravity_agent_error
 from .rate_limits import RateLimitInfo
 from .types import (
+    AntigravityAgentError,
+    AntigravityJsonPayload,
     ClaudeJsonPayload,
     CodexJsonPayload,
     CommandMetadata,
@@ -12,7 +15,9 @@ from .types import (
     ProviderFailure,
 )
 
-AIPayload = ClaudeJsonPayload | CodexJsonPayload | GrokJsonPayload
+AIPayload = (
+    ClaudeJsonPayload | CodexJsonPayload | GrokJsonPayload | AntigravityJsonPayload
+)
 
 
 class AIClientError(RuntimeError):
@@ -320,8 +325,19 @@ class GrokSchemaValidationError(SchemaValidationError, GrokCodeError):
     pass
 
 
+class AntigravityCodeError(AIClientError):
+    pass
+
+
+class AntigravitySchemaValidationError(SchemaValidationError, AntigravityCodeError):
+    pass
+
+
 class StructuredSchemaValidationError(
-    ClaudeSchemaValidationError, CodexSchemaValidationError, GrokSchemaValidationError
+    ClaudeSchemaValidationError,
+    CodexSchemaValidationError,
+    GrokSchemaValidationError,
+    AntigravitySchemaValidationError,
 ):
     pass
 
@@ -541,6 +557,137 @@ class GrokRateLimitError(RateLimitError, GrokLimitError):
         stdout: str,
         stderr: str,
         payload: GrokJsonPayload | None,
+        rate_limit: RateLimitInfo,
+    ) -> None:
+        super().__init__(
+            message,
+            command=command,
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+            payload=payload,
+            limit=rate_limit,
+        )
+
+
+# --- Antigravity errors (agy CLI; mirror the Claude/Codex/Grok families) ---
+
+
+class _AntigravityErrorMetadata:
+    """Read-only views over the evidence an Antigravity error already carries."""
+
+    payload: AntigravityJsonPayload | None = None
+    stderr: str = ""
+
+    @property
+    def conversation_id(self) -> str | None:
+        return None if self.payload is None else self.payload.conversation_id
+
+    @property
+    def agent_error(self) -> AntigravityAgentError | None:
+        """The structured ``AGY_ERROR`` record agy printed on stderr, if any."""
+        return parse_antigravity_agent_error(self.stderr)
+
+
+class AntigravityExecutableNotFoundError(ExecutableNotFoundError, AntigravityCodeError):
+    def __init__(self, executable: str) -> None:
+        self.executable = executable
+        super().__init__(f"Antigravity executable not found: {executable}")
+
+
+class AntigravityTimeoutError(
+    _AntigravityErrorMetadata, AIClientTimeoutError, AntigravityCodeError
+):
+    """The run exceeded the client timeout or agy's ``--print-timeout``.
+
+    ``stdout``/``stderr`` hold whatever the CLI wrote before it stopped, and
+    ``payload`` holds the partial stream-json run when one was recovered, so
+    ``conversation_id`` can resume the interrupted conversation.
+    """
+
+    def __init__(
+        self,
+        command: CommandMetadata,
+        timeout_seconds: float,
+        *,
+        stdout: str = "",
+        stderr: str = "",
+        payload: AntigravityJsonPayload | None = None,
+        message: str | None = None,
+    ) -> None:
+        self.command = command
+        self.timeout_seconds = timeout_seconds
+        self.stdout = stdout
+        self.stderr = stderr
+        self.payload = payload
+        super().__init__(
+            message or f"Antigravity command timed out after {timeout_seconds}s"
+        )
+
+
+class AntigravityProcessError(_AntigravityErrorMetadata, ProcessError, AntigravityCodeError):
+    payload: AntigravityJsonPayload | None
+
+
+class AntigravityCapacityError(CapacityError, AntigravityProcessError):
+    pass
+
+
+class AntigravityServerError(ServerError, AntigravityProcessError):
+    pass
+
+
+class AntigravitySessionNotFoundError(AntigravityProcessError):
+    """agy could not find the requested conversation.
+
+    agy reports this only as a warning and runs the prompt in a brand-new
+    conversation, so ``payload`` (when present) describes that unrelated
+    conversation, including any work it already did.
+    """
+
+
+class AntigravityApprovalRequiredError(ApprovalRequiredError, AntigravityProcessError):
+    payload: AntigravityJsonPayload
+
+    @property
+    def denied_actions(self) -> tuple[dict[str, object], ...]:
+        return self.payload.denied_actions
+
+
+class AntigravityNetworkUnavailableError(NetworkUnavailableError, AntigravityProcessError):
+    payload: AntigravityJsonPayload | None
+
+
+class AntigravityProtocolError(_AntigravityErrorMetadata, ProtocolError, AntigravityCodeError):
+    payload: AntigravityJsonPayload | None = None
+
+
+class AntigravityStructuredOutputMissingError(
+    StructuredOutputMissingError, AntigravityProtocolError
+):
+    payload: AntigravityJsonPayload
+
+
+class AntigravityStructuredOutputValidationError(
+    StructuredOutputValidationError, AntigravityProtocolError
+):
+    payload: AntigravityJsonPayload
+
+
+class AntigravityLimitError(LimitError, AntigravityProcessError):
+    pass
+
+
+class AntigravityRateLimitError(RateLimitError, AntigravityLimitError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        command: CommandMetadata,
+        returncode: int,
+        stdout: str,
+        stderr: str,
+        payload: AntigravityJsonPayload | None,
         rate_limit: RateLimitInfo,
     ) -> None:
         super().__init__(
