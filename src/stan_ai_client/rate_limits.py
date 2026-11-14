@@ -96,6 +96,18 @@ def _parse_absolute_reset(
 ) -> datetime | None:
     timezone_to_use = embedded_tz or local_tz
 
+    # Weekly/model allowances include a calendar date, unlike session limits.
+    match = re.search(
+        r"resets?\s+(?:at\s+)?([a-z]{3,9})\s+(\d{1,2}),\s*"
+        r"(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b",
+        text,
+    )
+    if match is not None:
+        return _dated_reset_to_datetime(
+            match.group(1), match.group(2), match.group(3),
+            reference=reference, timezone_to_use=timezone_to_use,
+        )
+
     match = re.search(r"resets?\s+(?:at\s+)?(\d{1,2})\s*(am|pm)", text)
     if match is not None:
         return _time_str_to_datetime(
@@ -126,6 +138,34 @@ def _parse_absolute_reset(
             timezone_to_use=timezone_to_use,
         )
 
+    return None
+
+
+def _dated_reset_to_datetime(
+    month: str,
+    day: str,
+    clock: str,
+    *,
+    reference: datetime,
+    timezone_to_use: tzinfo | None,
+) -> datetime | None:
+    local_reference = reference.astimezone(timezone_to_use) if timezone_to_use else reference
+    # Parse with a leap year first, then validate against the actual target year.
+    value = f"{month} {day} 2000 {_normalize_time_str(clock)}"
+    for month_format in ("%b", "%B"):
+        for time_format in ("%I:%M %p", "%I %p"):
+            try:
+                parsed = datetime.strptime(value, f"{month_format} %d %Y {time_format}")
+            except ValueError:
+                continue
+            year = local_reference.year + (
+                (parsed.month, parsed.day) < (local_reference.month, local_reference.day)
+            )
+            try:
+                target = parsed.replace(year=year, tzinfo=local_reference.tzinfo)
+            except ValueError:
+                return None
+            return target.astimezone(reference.tzinfo)
     return None
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+from datetime import datetime, timezone
 from collections.abc import Mapping
 from typing import Any
 
@@ -518,6 +519,29 @@ def test_run_json_raises_rate_limit_error(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert excinfo.value.rate_limit.retry_after_seconds == 3660
     assert not isinstance(excinfo.value, NetworkUnavailableError)
+
+
+def test_claude_model_quota_keeps_its_dated_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    from stan_ai_client import parse_rate_limit_info
+
+    message = "You've hit your Fable limit · resets Nov 18, 5am (Europe/Madrid)."
+    recorder = RunRecorder(subprocess.CompletedProcess(
+        args=[], returncode=0,
+        stdout=json.dumps({"type": "result", "subtype": "success", "is_error": True,
+                           "result": message, "api_error_status": 429,
+                           "api_error": "usage_limit_reached"}),
+        stderr="",
+    ))
+    monkeypatch.setattr("stan_ai_client.transport.subprocess.run", recorder)
+    monkeypatch.setattr("stan_ai_client.claude.parse_rate_limit_info", lambda text:
+                        parse_rate_limit_info(text, now=datetime(2026, 11, 13, tzinfo=timezone.utc)))
+
+    with pytest.raises(ClaudeRateLimitError) as caught:
+        ClaudeCodeClient().run_json("hello")
+
+    assert str(caught.value) == message
+    assert caught.value.reset_at == datetime(2026, 11, 18, 4, 1, tzinfo=timezone.utc)
+    assert caught.value.retry_after_seconds == 446460
 
 
 def test_claude_overloaded_api_error_is_capacity(

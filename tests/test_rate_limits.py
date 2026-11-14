@@ -80,6 +80,38 @@ def test_parse_pr105_claude_usage_limit_11_40pm_europe_madrid() -> None:
     assert info.reset_at == datetime(2026, 7, 28, 23, 41, tzinfo=timezone)
 
 
+@pytest.mark.parametrize("date", ["Nov 18, 5am", "November 18, 5:00 AM"])
+def test_pr588_model_limit_preserves_calendar_reset(date: str) -> None:
+    reference = datetime(2026, 11, 13, 20, 15, 28, tzinfo=ZoneInfo("UTC"))
+    info = parse_rate_limit_info(
+        f"You've hit your Fable limit · resets {date} (Europe/Madrid). "
+        "Switch to another model, or manage usage credits to continue.",
+        now=reference,
+    )
+    expected = datetime(2026, 11, 18, 4, 1, tzinfo=ZoneInfo("UTC"))
+    assert info.reset_at == expected
+    assert info.retry_after_seconds == int((expected - reference).total_seconds())
+
+
+@pytest.mark.parametrize("utc_hour", [22, 23])
+def test_dated_reset_uses_embedded_zone_and_rolls_year_at_new_year(utc_hour: int) -> None:
+    info = parse_rate_limit_info(
+        "Usage limit · resets Jan 1, 12:15am (Europe/Madrid)",
+        now=datetime(2026, 12, 31, utc_hour, 10, tzinfo=ZoneInfo("UTC")),
+    )
+    assert info.reset_at == datetime(2026, 12, 31, 23, 16, tzinfo=ZoneInfo("UTC"))
+
+
+@pytest.mark.parametrize("date", ["Feb 30, 5am", "Nov 18, 25am", "Nov 18, 5amUTC"])
+def test_invalid_dated_reset_has_no_retry_metadata(date: str) -> None:
+    info = parse_rate_limit_info(
+        f"Usage limit · resets {date} (Europe/Madrid)",
+        now=datetime(2026, 11, 13, tzinfo=ZoneInfo("UTC")),
+    )
+    assert info.reset_at is None
+    assert info.retry_after_seconds is None
+
+
 @pytest.mark.parametrize(
     "message",
     [
